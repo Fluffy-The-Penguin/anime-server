@@ -13,6 +13,9 @@ const MANGADEX_API_URL = "https://api.mangadex.org";
 const ASURA_BASE_URL = "https://asurascans.com";
 const MANGAKATANA_BASE_URL = "https://mangakatana.com";
 const WEEBCENTRAL_BASE_URL = "https://weebcentral.com";
+const FLAMECOMICS_BASE_URL = "https://flamecomics.com";
+const RIZZCOMIC_BASE_URL = "https://rizzcomic.com";
+const TOONILY_BASE_URL = "https://toonily.com";
 
 const app = express();
 const cache = new Map();
@@ -109,17 +112,23 @@ app.get("/api/manga/search", async (req, res, next) => {
     }
     const providers = providerSet(req.query.providers);
 
-    const [mangaDexResults, asuraResults, mangaKatanaResults, weebCentralResults] = await Promise.allSettled([
+    const [mangaDexResults, asuraResults, mangaKatanaResults, weebCentralResults, flameComicsResults, rizzComicResults, toonilyResults] = await Promise.allSettled([
       providers.has("mangadex") ? searchMangaDexManga(title) : [],
       providers.has("asura") ? searchAsuraManga(title) : [],
       providers.has("mangakatana") ? searchMangaKatanaManga(title) : [],
       providers.has("weebcentral") ? searchWeebCentralManga(title) : [],
+      providers.has("flamecomics") ? searchFlameComicsManga(title) : [],
+      providers.has("rizzcomic") ? searchRizzComicManga(title) : [],
+      providers.has("toonily") ? searchToonilyManga(title) : [],
     ]);
     res.json([
       ...(mangaDexResults.status === "fulfilled" ? mangaDexResults.value : []),
       ...(asuraResults.status === "fulfilled" ? asuraResults.value : []),
       ...(mangaKatanaResults.status === "fulfilled" ? mangaKatanaResults.value : []),
       ...(weebCentralResults.status === "fulfilled" ? weebCentralResults.value : []),
+      ...(flameComicsResults.status === "fulfilled" ? flameComicsResults.value : []),
+      ...(rizzComicResults.status === "fulfilled" ? rizzComicResults.value : []),
+      ...(toonilyResults.status === "fulfilled" ? toonilyResults.value : []),
     ]);
   } catch (error) {
     next(error);
@@ -146,6 +155,21 @@ app.get("/api/manga/chapters", async (req, res, next) => {
 
     if (mangaId.startsWith("weebcentral:")) {
       res.json(await getWeebCentralChapters(mangaId.slice(12)));
+      return;
+    }
+
+    if (mangaId.startsWith("flamecomics:")) {
+      res.json(await getFlameComicsChapters(mangaId.slice(13)));
+      return;
+    }
+
+    if (mangaId.startsWith("rizzcomic:")) {
+      res.json(await getRizzComicChapters(mangaId.slice(10)));
+      return;
+    }
+
+    if (mangaId.startsWith("toonily:")) {
+      res.json(await getToonilyChapters(mangaId.slice(8)));
       return;
     }
 
@@ -189,6 +213,21 @@ app.get("/api/manga/pages", async (req, res, next) => {
 
     if (chapterId.startsWith("weebcentral:")) {
       res.json({ pages: await getWeebCentralPages(chapterId.slice(12)) });
+      return;
+    }
+
+    if (chapterId.startsWith("flamecomics:")) {
+      res.json({ pages: await getFlameComicsPages(chapterId.slice(13)) });
+      return;
+    }
+
+    if (chapterId.startsWith("rizzcomic:")) {
+      res.json({ pages: await getRizzComicPages(chapterId.slice(10)) });
+      return;
+    }
+
+    if (chapterId.startsWith("toonily:")) {
+      res.json({ pages: await getToonilyPages(chapterId.slice(8)) });
       return;
     }
 
@@ -697,6 +736,214 @@ async function getWeebCentralPages(path) {
   return pages;
 }
 
+async function searchFlameComicsManga(title) {
+  const html = await fetchTextCached(FLAMECOMICS_BASE_URL);
+  const data = parseNextData(html);
+  const entries = collectObjects(data).filter((item) => item && item.series_id && item.title);
+  const seen = new Set();
+  const results = [];
+
+  for (const item of entries) {
+    const id = String(item.series_id);
+    const name = cleanHtml(item.title);
+    if (!id || !name || seen.has(id) || titleScore(title, name) < 0.2) continue;
+    seen.add(id);
+    results.push({
+      id: `flamecomics:/series/${id}`,
+      provider: "flamecomics",
+      title: name,
+      description: cleanHtml(item.description || asArray(item.altTitles).join(", ")),
+      status: cleanHtml(item.status || "unknown"),
+      year: "",
+      cover: absolutizeUrl(item.thumbnail || item.cover || item.thumbnail_url || "", FLAMECOMICS_BASE_URL),
+      chapterCount: Number(item.chapter_count || item.chapterCount || 0),
+      score: titleScore(title, name),
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function getFlameComicsChapters(path) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}${safePath}`);
+  const data = parseNextData(html);
+  const entries = collectObjects(data).filter((item) => item && (item.chapter_id || item.slug || item.hash) && (item.title || item.chapter || item.number));
+  const seriesPath = firstMatch(safePath, /^\/series\/[^/]+/i) || safePath.replace(/\/$/, "");
+  const chapters = [];
+  const seen = new Set();
+
+  const htmlPattern = new RegExp(`href="(${escapeRegex(seriesPath)}\/[^"#?]+)"`, "gi");
+  let htmlMatch;
+  while ((htmlMatch = htmlPattern.exec(html))) {
+    const chapterPath = decodeXml(htmlMatch[1]);
+    if (seen.has(chapterPath) || /thumbnail|cover\.|\.(?:webp|jpg|jpeg|png|gif)$/i.test(chapterPath)) continue;
+    seen.add(chapterPath);
+    const nearby = html.slice(Math.max(0, htmlMatch.index - 900), Math.min(html.length, htmlMatch.index + 1200));
+    const title = cleanHtml(firstMatch(nearby, /"title":"([^"]+)"/i) || firstMatch(nearby, /<h[1-4][^>]*>([\s\S]*?)<\/h[1-4]>/i));
+    const number = firstMatch(`${title} ${chapterPath}`, /(?:chapter|ch\.?|AGS-|-)\s*([\d.]+)/i) || firstMatch(`${title} ${chapterPath}`, /([\d.]+)/) || String(chapters.length + 1);
+    chapters.push({ id: `flamecomics:${chapterPath}`, provider: "flamecomics", number, title: title || `Chapter ${number}`, date: "Date TBA", description: title || `Chapter ${number}`, pages: 1 });
+  }
+
+  if (chapters.length) {
+    return chapters.filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+  }
+
+  for (const item of entries) {
+    const slug = cleanHtml(item.slug || item.hash || item.chapter_id || "");
+    const rawPath = cleanHtml(item.path || item.url || "");
+    const chapterPath = rawPath.startsWith("/series/") ? rawPath : slug ? `${seriesPath}/${slug}` : "";
+    if (!chapterPath || seen.has(chapterPath) || /thumbnail|cover\./i.test(chapterPath)) continue;
+    seen.add(chapterPath);
+    const title = cleanHtml(item.title || item.name || "");
+    const number = firstMatch(`${item.chapter || item.number || ""} ${title} ${chapterPath}`, /(?:chapter|ch\.?|AGS-|-)\s*([\d.]+)/i) || firstMatch(`${item.chapter || item.number || ""} ${title}`, /([\d.]+)/) || String(chapters.length + 1);
+
+    chapters.push({
+      id: `flamecomics:${chapterPath}`,
+      provider: "flamecomics",
+      number,
+      title: title || `Chapter ${number}`,
+      date: item.created_at || item.updated_at ? new Date(item.created_at || item.updated_at).toLocaleDateString("en-US") : "Date TBA",
+      description: title || `Chapter ${number}`,
+      pages: 1,
+    });
+  }
+
+  if (!chapters.length) {
+    const pattern = new RegExp(`href="(${escapeRegex(seriesPath)}\/[^"#?]+)"`, "gi");
+    let match;
+    while ((match = pattern.exec(html))) {
+      const chapterPath = decodeXml(match[1]);
+      if (seen.has(chapterPath) || /thumbnail|cover\./i.test(chapterPath)) continue;
+      seen.add(chapterPath);
+      const nearby = html.slice(Math.max(0, match.index - 600), Math.min(html.length, match.index + 900));
+      const title = cleanHtml(firstMatch(nearby, /<h[1-4][^>]*>([\s\S]*?)<\/h[1-4]>/i));
+      const number = firstMatch(`${title} ${chapterPath}`, /(?:chapter|ch\.?|AGS-|-)\s*([\d.]+)/i) || firstMatch(`${title} ${chapterPath}`, /([\d.]+)/) || String(chapters.length + 1);
+      chapters.push({ id: `flamecomics:${chapterPath}`, provider: "flamecomics", number, title: title || `Chapter ${number}`, date: "Date TBA", description: title || `Chapter ${number}`, pages: 1 });
+    }
+  }
+
+  return chapters.filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+async function getFlameComicsPages(path) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}${safePath}`);
+  return uniqueMatches(html, /https:\/\/cdn\.flamecomics\.xyz\/uploads\/images\/series\/[^"'\\<\s]+?\.(?:webp|jpg|jpeg|png|gif)(?:\?\d+)?/gi)
+    .filter((url) => !/\/thumbnail\.|\/cover\./i.test(url));
+}
+
+async function searchRizzComicManga(title) {
+  return searchWordPressManga({
+    title,
+    baseUrl: RIZZCOMIC_BASE_URL,
+    provider: "rizzcomic",
+    prefix: "rizzcomic",
+    searchPath: `/?s=${encodeURIComponent(title)}`,
+    seriesPattern: /href="(https:\/\/rizzcomic\.com\/manga\/[^"#?]+\/?)"[^>]*>([\s\S]*?)<\/a>/gi,
+  });
+}
+
+async function getRizzComicChapters(path) {
+  return getWordPressChapters({ path, baseUrl: RIZZCOMIC_BASE_URL, provider: "rizzcomic", prefix: "rizzcomic", chapterPattern: /href="(https:\/\/rizzcomic\.com\/[^"#?]+chapter[^"#?]+\/?)"[^>]*>([\s\S]*?)<\/a>/gi });
+}
+
+async function getRizzComicPages(path) {
+  return getWordPressPages({ path, baseUrl: RIZZCOMIC_BASE_URL, imagePattern: /https:\/\/(?:phitoria\.com\/series\/data|[^"'\\<\s]*rizzcomic\.com\/wp-content\/uploads)\/[^"'\\<\s]+?\.(?:webp|jpg|jpeg|png|gif)/gi });
+}
+
+async function searchToonilyManga(title) {
+  return searchWordPressManga({
+    title,
+    baseUrl: TOONILY_BASE_URL,
+    provider: "toonily",
+    prefix: "toonily",
+    searchPath: `/?s=${encodeURIComponent(title)}&post_type=wp-manga`,
+    seriesPattern: /href="(https:\/\/toonily\.com\/serie\/[^"#?]+\/?)"[^>]*>([\s\S]*?)<\/a>/gi,
+  });
+}
+
+async function getToonilyChapters(path) {
+  return getWordPressChapters({ path, baseUrl: TOONILY_BASE_URL, provider: "toonily", prefix: "toonily", chapterPattern: /data-redirect="(https:\/\/toonily\.com\/serie\/[^"#?]+\/(?:chapter|side-story)-[^"#?]+\/?)"[\s\S]*?<\/div>/gi });
+}
+
+async function getToonilyPages(path) {
+  return getWordPressPages({ path, baseUrl: TOONILY_BASE_URL, imagePattern: /https:\/\/(?:static\.tnlycdn\.com|toonily\.com\/wp-content\/uploads)\/[^"'\\<\s]+?\.(?:webp|jpg|jpeg|png|gif)/gi });
+}
+
+async function searchWordPressManga({ title, baseUrl, provider, prefix, searchPath, seriesPattern }) {
+  const html = await fetchTextCached(`${baseUrl}${searchPath}`);
+  const results = [];
+  const seen = new Set();
+  let match;
+
+  while ((match = seriesPattern.exec(html))) {
+    const url = new URL(decodeXml(match[1]));
+    const path = url.pathname;
+    if (seen.has(path)) continue;
+    seen.add(path);
+
+    const nearby = html.slice(Math.max(0, match.index - 1200), Math.min(html.length, match.index + 2200));
+    const name = cleanHtml(firstMatch(match[0], /title="([^"]+)"/i)) || cleanHtml(firstMatch(nearby, /title="([^"]+)"/i)) || cleanHtml(firstMatch(nearby, /alt="([^"]+)"/i)) || cleanHtml(match[2]);
+    if (!name || titleScore(title, name) < 0.15) continue;
+    const cover = decodeXml(firstMatch(nearby, /<img[^>]+(?:data-src|src)="([^"]+)"/i));
+
+    results.push({
+      id: `${prefix}:${path}`,
+      provider,
+      title: name,
+      description: cleanHtml(firstMatch(nearby, /<div[^>]+class="[^"]*(?:summary|excerpt|desc)[^"]*"[^>]*>([\s\S]*?)<\/div>/i)),
+      status: cleanHtml(firstMatch(nearby, /(?:Status|status)[\s\S]{0,120}?<[^>]+>([^<]+)<\/[^>]+>/i)) || "unknown",
+      year: "",
+      cover: absolutizeUrl(cover, baseUrl),
+      chapterCount: 0,
+      score: titleScore(title, name),
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function getWordPressChapters({ path, baseUrl, provider, prefix, chapterPattern }) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${baseUrl}${safePath}`);
+  const chapters = [];
+  const seen = new Set();
+  let match;
+
+  while ((match = chapterPattern.exec(html))) {
+    const url = new URL(decodeXml(match[1]));
+    const chapterPath = url.pathname;
+    if (seen.has(chapterPath)) continue;
+    seen.add(chapterPath);
+
+    const block = match[0];
+    const title = cleanHtml(match[2] || block) || cleanHtml(firstMatch(block, /title="([^"]+)"/i));
+    const number = firstMatch(`${title} ${chapterPath}`, /(?:chapter|ch\.?)\s*([\d.]+)/i) || firstMatch(`${title} ${chapterPath}`, /side-story-([\d.]+)/i) || firstMatch(`${title} ${chapterPath}`, /([\d.]+)/) || String(chapters.length + 1);
+    const date = cleanHtml(firstMatch(block, /<time[^>]*>([\s\S]*?)<\/time>/i) || firstMatch(block, /class="[^"]*(?:date|time)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i)) || "Date TBA";
+
+    chapters.push({
+      id: `${prefix}:${chapterPath}`,
+      provider,
+      number,
+      title: title || `Chapter ${number}`,
+      date,
+      description: title || `Chapter ${number}`,
+      pages: 1,
+    });
+  }
+
+  return chapters.filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+async function getWordPressPages({ path, baseUrl, imagePattern }) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${baseUrl}${safePath}`, { headers: { "Referer": `${baseUrl}${safePath}` } });
+  return uniqueMatches(html, imagePattern)
+    .map((url) => absolutizeUrl(url, baseUrl))
+    .filter((url) => !/logo|favicon|cropped|thumbnail|cover|avatar|banner|wp-content\/themes|wp-content\/plugins/i.test(url));
+}
+
 function cleanHtml(value) {
   return decodeXml(String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
 }
@@ -708,6 +955,54 @@ function firstMatch(value, pattern) {
 function localizedText(value) {
   if (!value) return "";
   return value.en || Object.values(value)[0] || "";
+}
+
+function parseNextData(html) {
+  const raw = firstMatch(html, /<script\s+id="__NEXT_DATA__"\s+type="application\/json">([\s\S]*?)<\/script>/i);
+  if (!raw) return {};
+  try {
+    return JSON.parse(decodeXml(raw));
+  } catch (error) {
+    return {};
+  }
+}
+
+function collectObjects(value, output = [], seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return output;
+  seen.add(value);
+  if (!Array.isArray(value)) output.push(value);
+  for (const item of Object.values(value)) {
+    if (item && typeof item === "object") collectObjects(item, output, seen);
+  }
+  return output;
+}
+
+function uniqueMatches(value, pattern) {
+  const results = [];
+  const seen = new Set();
+  let match;
+  while ((match = pattern.exec(String(value || "")))) {
+    const url = decodeXml(match[0]).replace(/\\u002F/g, "/");
+    if (seen.has(url)) continue;
+    seen.add(url);
+    results.push(url);
+  }
+  return results;
+}
+
+function absolutizeUrl(value, baseUrl) {
+  const url = decodeXml(String(value || "")).trim();
+  if (!url) return "";
+  if (/^https?:\/\//i.test(url)) return url;
+  try {
+    return new URL(url, baseUrl).toString();
+  } catch (error) {
+    return url;
+  }
+}
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function parseNyaaRss(xml) {
@@ -844,7 +1139,7 @@ function pathSegment(value) {
 }
 
 function providerSet(value) {
-  const allowed = new Set(["mangadex", "asura", "mangakatana", "weebcentral"]);
+  const allowed = new Set(["mangadex", "asura", "mangakatana", "weebcentral", "flamecomics", "rizzcomic", "toonily"]);
   const selected = String(value || "").split(",").map((item) => item.trim().toLowerCase()).filter((item) => allowed.has(item));
   return new Set(selected.length ? selected : allowed);
 }
