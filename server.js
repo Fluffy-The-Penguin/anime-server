@@ -3,7 +3,7 @@ import express from "express";
 
 const PORT = Number(process.env.PORT || process.env.SERVER_PORT || process.env.P_SERVER_PORT || process.env.APP_PORT || 3000);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
-const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 12000);
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 20000);
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 10 * 60 * 1000);
 
 const ANIME_REPO_URL = "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json";
@@ -255,8 +255,10 @@ app.get("/api/stremio/search-streams", async (req, res, next) => {
 });
 
 app.use((error, req, res, next) => {
-  console.error(error);
-  res.status(500).json({ error: "Backend request failed" });
+  const isTimeout = error.name === "AbortError" || error.code === "UPSTREAM_TIMEOUT";
+  const status = error.status || (isTimeout ? 504 : 500);
+  console.error(isTimeout ? `Upstream request timed out: ${error.url || req.originalUrl}` : error);
+  res.status(status).json({ error: isTimeout ? "Upstream request timed out" : "Backend request failed" });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
@@ -804,6 +806,16 @@ async function fetchTextCached(url, options = {}) {
     const value = await response.text();
     cache.set(url, { value, time: Date.now() });
     return value;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      const timeoutError = new Error(`Upstream request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+      timeoutError.name = "UpstreamTimeoutError";
+      timeoutError.code = "UPSTREAM_TIMEOUT";
+      timeoutError.status = 504;
+      timeoutError.url = url;
+      throw timeoutError;
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
