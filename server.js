@@ -436,7 +436,7 @@ async function getAsuraPages(path) {
   const html = await fetchTextCached(`${ASURA_BASE_URL}${safePath}`);
   const pages = [];
   const seen = new Set();
-  const pattern = /https:\/\/cdn\.asurascans\.com\/asura-images\/chapters\/[^"'\\<\s]+/gi;
+  const pattern = /https:\/\/cdn\.asurascans\.com\/asura-images\/chapters\/[^"'\\<\s]+?\.(?:webp|jpg|jpeg|png|gif)/gi;
   let match;
 
   while ((match = pattern.exec(html))) {
