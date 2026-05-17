@@ -13,7 +13,8 @@ const MANGADEX_API_URL = "https://api.mangadex.org";
 const ASURA_BASE_URL = "https://asurascans.com";
 const MANGAKATANA_BASE_URL = "https://mangakatana.com";
 const WEEBCENTRAL_BASE_URL = "https://weebcentral.com";
-const FLAMECOMICS_BASE_URL = "https://flamecomics.com";
+const FLAMECOMICS_BASE_URL = "https://flamecomics.xyz";
+const FLAMECOMICS_CDN_URL = "https://cdn.flamecomics.xyz";
 const RIZZCOMIC_BASE_URL = "https://rizzcomic.com";
 const TOONILY_BASE_URL = "https://toonily.com";
 
@@ -751,7 +752,7 @@ async function getWeebCentralPages(path) {
 }
 
 async function searchFlameComicsManga(title) {
-  const html = await fetchTextCached(FLAMECOMICS_BASE_URL);
+  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}/browse`);
   const data = parseNextData(html);
   const entries = collectObjects(data).filter((item) => item && item.series_id && item.title);
   const seen = new Set();
@@ -769,7 +770,7 @@ async function searchFlameComicsManga(title) {
       description: cleanHtml(item.description || asArray(item.altTitles).join(", ")),
       status: cleanHtml(item.status || "unknown"),
       year: "",
-      cover: absolutizeUrl(item.thumbnail || item.cover || item.thumbnail_url || "", FLAMECOMICS_BASE_URL),
+      cover: flameComicsCoverUrl(id, item.thumbnail || item.cover || item.thumbnail_url || ""),
       chapterCount: Number(item.chapter_count || item.chapterCount || 0),
       score: titleScore(title, name),
     });
@@ -778,14 +779,46 @@ async function searchFlameComicsManga(title) {
   return results.sort((a, b) => b.score - a.score).slice(0, 10);
 }
 
+function flameComicsCoverUrl(seriesId, cover) {
+  const file = cleanHtml(cover || "");
+  if (!file) return "";
+  if (/^https?:\/\//i.test(file)) return file;
+  return `${FLAMECOMICS_CDN_URL}/uploads/images/series/${seriesId}/${file.replace(/^\/+/, "")}`;
+}
+
 async function getFlameComicsChapters(path) {
   const safePath = path.startsWith("/") ? path : `/${path}`;
   const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}${safePath}`);
   const data = parseNextData(html);
-  const entries = collectObjects(data).filter((item) => item && (item.chapter_id || item.slug || item.hash) && (item.title || item.chapter || item.number));
+  const entries = collectObjects(data).filter((item) => item && (item.chapter_id || item.slug || item.hash || item.token) && (item.title || item.chapter || item.number));
   const seriesPath = firstMatch(safePath, /^\/series\/[^/]+/i) || safePath.replace(/\/$/, "");
   const chapters = [];
   const seen = new Set();
+
+  for (const item of entries) {
+    const slug = cleanHtml(item.slug || item.hash || item.token || item.chapter_id || "");
+    const rawPath = cleanHtml(item.path || item.url || "");
+    const chapterPath = rawPath.startsWith("/series/") ? rawPath : slug ? `${seriesPath}/${slug}` : "";
+    if (!chapterPath || seen.has(chapterPath) || /thumbnail|cover\./i.test(chapterPath)) continue;
+    seen.add(chapterPath);
+    const number = cleanChapterNumber(item.chapter || item.number || "") || firstMatch(`${item.title || ""} ${chapterPath}`, /(?:chapter|ch\.?|-)[^\d]*([\d.]+)/i) || String(chapters.length + 1);
+    const title = cleanHtml(item.title || "") || `Chapter ${number}`;
+    const timestamp = Number(item.release_date || item.edit_time || item.created_at || item.updated_at || 0);
+
+    chapters.push({
+      id: `flamecomics:${chapterPath}`,
+      provider: "flamecomics",
+      number,
+      title,
+      date: timestamp ? new Date(timestamp * 1000).toLocaleDateString("en-US") : "Date TBA",
+      description: title,
+      pages: 1,
+    });
+  }
+
+  if (chapters.length) {
+    return chapters.filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+  }
 
   const htmlPattern = new RegExp(`href="(${escapeRegex(seriesPath)}\/[^"#?]+)"`, "gi");
   let htmlMatch;
@@ -838,6 +871,11 @@ async function getFlameComicsChapters(path) {
   }
 
   return chapters.filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+function cleanChapterNumber(value) {
+  const number = Number.parseFloat(value);
+  return Number.isFinite(number) ? String(number) : "";
 }
 
 async function getFlameComicsPages(path) {
