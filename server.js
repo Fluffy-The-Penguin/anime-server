@@ -10,6 +10,7 @@ const ANIME_REPO_URL = "https://raw.githubusercontent.com/yuzono/anime-repo/repo
 const MANGA_REPO_URL = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json";
 const NYAA_RSS_URL = "https://nyaa.si/";
 const MANGADEX_API_URL = "https://api.mangadex.org";
+const ASURA_BASE_URL = "https://asurascans.com";
 
 const app = express();
 const cache = new Map();
@@ -115,7 +116,11 @@ app.get("/api/manga/search", async (req, res, next) => {
       ["order[relevance]", "desc"],
     ]).toString()}`);
 
-    res.json(asArray(data.data).map(mapMangaDexManga));
+    const [asuraResults] = await Promise.allSettled([searchAsuraManga(title)]);
+    res.json([
+      ...asArray(data.data).map(mapMangaDexManga),
+      ...(asuraResults.status === "fulfilled" ? asuraResults.value : []),
+    ]);
   } catch (error) {
     next(error);
   }
@@ -126,6 +131,11 @@ app.get("/api/manga/chapters", async (req, res, next) => {
     const mangaId = cleanQuery(req.query.mangaId);
     if (!mangaId) {
       res.status(400).json({ error: "mangaId is required" });
+      return;
+    }
+
+    if (mangaId.startsWith("asura:")) {
+      res.json(await getAsuraChapters(mangaId.slice(6)));
       return;
     }
 
@@ -154,6 +164,11 @@ app.get("/api/manga/pages", async (req, res, next) => {
     const chapterId = cleanQuery(req.query.chapterId);
     if (!chapterId) {
       res.status(400).json({ error: "chapterId is required" });
+      return;
+    }
+
+    if (chapterId.startsWith("asura:")) {
+      res.json({ pages: await getAsuraPages(chapterId.slice(6)) });
       return;
     }
 
@@ -349,6 +364,97 @@ function mapMangaDexChapter(item) {
     description: attrs.title || `Chapter ${attrs.chapter || "?"}`,
     pages: Number(attrs.pages || 0),
   };
+}
+
+async function searchAsuraManga(title) {
+  const html = await fetchTextCached(`${ASURA_BASE_URL}/browse?search=${encodeURIComponent(title)}`);
+  const results = [];
+  const seen = new Set();
+  const pattern = /<a[^>]+href="(\/comics\/[^"]+)"[\s\S]{0,700}?<h3[^>]*>([\s\S]*?)<\/h3>/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const path = decodeXml(match[1]);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const name = cleanHtml(match[2]);
+    if (!name) continue;
+
+    const nearby = html.slice(Math.max(0, match.index - 1600), Math.min(html.length, match.index + 1600));
+    const cover = decodeXml(firstMatch(nearby, /&quot;cover(?:_url)?&quot;:\[0,&quot;([^&]+)&quot;\]/i));
+    const description = cleanHtml(decodeXml(firstMatch(nearby, /&quot;description&quot;:\[0,&quot;([\s\S]*?)&quot;\]/i)));
+    const chapterCount = Number(firstMatch(nearby, /&quot;chapter_count&quot;:\[0,(\d+)\]/i) || 0);
+
+    results.push({
+      id: `asura:${path}`,
+      provider: "asura",
+      title: name,
+      description,
+      status: "unknown",
+      year: "",
+      cover,
+      chapterCount,
+      score: titleScore(title, name),
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function getAsuraChapters(path) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${ASURA_BASE_URL}${safePath}`);
+  const chapters = [];
+  const seen = new Set();
+  const pattern = /href="(\/comics\/[^"]+\/chapter\/([^"/]+))"/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const chapterPath = decodeXml(match[1]);
+    const number = decodeXml(match[2]);
+    if (seen.has(chapterPath)) continue;
+    seen.add(chapterPath);
+
+    chapters.push({
+      id: `asura:${chapterPath}`,
+      provider: "asura",
+      number,
+      title: `Chapter ${number}`,
+      date: "Date TBA",
+      description: `Chapter ${number}`,
+      pages: 1,
+    });
+  }
+
+  return chapters
+    .filter((chapter) => chapter.number !== "0")
+    .sort((a, b) => Number(a.number) - Number(b.number));
+}
+
+async function getAsuraPages(path) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${ASURA_BASE_URL}${safePath}`);
+  const pages = [];
+  const seen = new Set();
+  const pattern = /https:\/\/cdn\.asurascans\.com\/asura-images\/chapters\/[^"'\\<\s]+/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const url = decodeXml(match[0]).replace(/&quot.*$/i, "");
+    if (seen.has(url)) continue;
+    seen.add(url);
+    pages.push(url);
+  }
+
+  return pages;
+}
+
+function cleanHtml(value) {
+  return decodeXml(String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+function firstMatch(value, pattern) {
+  return String(value || "").match(pattern)?.[1] || "";
 }
 
 function localizedText(value) {
