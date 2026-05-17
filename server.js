@@ -480,7 +480,7 @@ async function getAsuraChapters(path) {
   const html = await fetchTextCached(`${ASURA_BASE_URL}${safePath}`);
   const chapters = [];
   const seen = new Set();
-  const pattern = /href="(\/comics\/[^"]+\/chapter\/([^"/]+))"/gi;
+  const pattern = /<a\s+href="(\/comics\/[^"]+\/chapter\/([^"/]+))"[^>]*data-astro-prefetch="hover"[^>]*>([\s\S]*?)<\/a>/gi;
   let match;
 
   while ((match = pattern.exec(html))) {
@@ -488,16 +488,30 @@ async function getAsuraChapters(path) {
     const number = decodeXml(match[2]);
     if (seen.has(chapterPath)) continue;
     seen.add(chapterPath);
+    const block = match[3];
+    const subtitle = cleanHtml(firstMatch(block, /<span\s+class="[^"]*block[^"]*"[^>]*>([\s\S]*?)<\/span>/i));
+    const date = cleanHtml(firstMatch(block, /<div\s+class="[^"]*flex-shrink-0[^"]*"[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i)) || "Date TBA";
 
     chapters.push({
       id: `asura:${chapterPath}`,
       provider: "asura",
       number,
-      title: `Chapter ${number}`,
-      date: "Date TBA",
-      description: `Chapter ${number}`,
+      title: subtitle ? `Chapter ${number}: ${subtitle}` : `Chapter ${number}`,
+      date,
+      description: subtitle || `Chapter ${number}`,
       pages: 1,
     });
+  }
+
+  if (!chapters.length) {
+    const fallbackPattern = /href="(\/comics\/[^"]+\/chapter\/([^"/]+))"/gi;
+    while ((match = fallbackPattern.exec(html))) {
+      const chapterPath = decodeXml(match[1]);
+      const number = decodeXml(match[2]);
+      if (seen.has(chapterPath)) continue;
+      seen.add(chapterPath);
+      chapters.push({ id: `asura:${chapterPath}`, provider: "asura", number, title: `Chapter ${number}`, date: "Date TBA", description: `Chapter ${number}`, pages: 1 });
+    }
   }
 
   return chapters
@@ -1040,6 +1054,8 @@ function decodeXml(value) {
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
     .replace(/&amp;/g, "&");
 }
 
