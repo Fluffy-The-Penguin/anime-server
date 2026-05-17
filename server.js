@@ -849,17 +849,30 @@ async function getMangaKatanaPages(path) {
 }
 
 async function searchWeebCentralManga(title) {
-  const html = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}/search/data?${new URLSearchParams([
-    ["text", title],
-    ["display_mode", "Full Display"],
-  ]).toString()}`, {
-    headers: {
-      "HX-Request": "true",
-      "Referer": `${WEEBCENTRAL_BASE_URL}/search?text=${encodeURIComponent(title)}`,
-    },
-  });
-  const results = parseWeebCentralSearchResults(html, title);
-  return results.length ? results : searchWeebCentralSitemap(title);
+  try {
+    const html = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}/search/data?${new URLSearchParams([
+      ["text", title],
+      ["display_mode", "Full Display"],
+    ]).toString()}`, {
+      headers: {
+        "Accept": "text/html,*/*;q=0.8",
+        "HX-Request": "true",
+        "HX-Current-URL": `${WEEBCENTRAL_BASE_URL}/search?text=${encodeURIComponent(title)}`,
+        "Referer": `${WEEBCENTRAL_BASE_URL}/search?text=${encodeURIComponent(title)}`,
+      },
+    });
+    const results = parseWeebCentralSearchResults(html, title);
+    if (results.length) return results;
+  } catch (error) {
+    console.warn(`WeebCentral search failed, trying sitemap fallback: ${error.status || error.message}`);
+  }
+
+  try {
+    return await searchWeebCentralSitemap(title);
+  } catch (error) {
+    console.warn(`WeebCentral sitemap fallback failed: ${error.status || error.message}`);
+    return [];
+  }
 }
 
 function parseWeebCentralSearchResults(html, title) {
@@ -1428,6 +1441,7 @@ async function fetchTextCached(url, options = {}) {
     if (!response.ok) {
       const error = new Error(`${response.status} ${response.statusText}`);
       error.status = response.status;
+      error.url = url;
       throw error;
     }
     const value = await response.text();
