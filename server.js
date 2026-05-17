@@ -627,31 +627,69 @@ async function searchWeebCentralManga(title) {
   const html = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}/search/data?${new URLSearchParams([
     ["text", title],
     ["display_mode", "Full Display"],
-  ]).toString()}`);
+  ]).toString()}`, {
+    headers: {
+      "HX-Request": "true",
+      "Referer": `${WEEBCENTRAL_BASE_URL}/search?text=${encodeURIComponent(title)}`,
+    },
+  });
+  const results = parseWeebCentralSearchResults(html, title);
+  return results.length ? results : searchWeebCentralSitemap(title);
+}
+
+function parseWeebCentralSearchResults(html, title) {
   const results = [];
   const seen = new Set();
-  const pattern = /<article\b[\s\S]*?<a\s+href="https:\/\/weebcentral\.com(\/series\/[^"]+)"[\s\S]*?<img\s+src="([^"]*)"\s+alt="([^"]*?)\s+cover"[\s\S]*?<strong>Year:<\/strong>\s*<span>([^<]*)<\/span>[\s\S]*?<strong>Status:<\/strong>\s*<span>([^<]*)<\/span>/gi;
-  let match;
+  const blocks = String(html || "").split(/(?=<article\b[^>]*class="[^"]*bg-base-300)/i);
 
-  while ((match = pattern.exec(html))) {
-    const path = decodeXml(match[1]);
+  for (const block of blocks) {
+    const path = decodeXml(firstMatch(block, /href="https:\/\/weebcentral\.com(\/series\/[^"]+)"/i));
     if (seen.has(path)) continue;
     seen.add(path);
 
-    const name = cleanHtml(match[3]);
-    if (!name) continue;
-    const nearby = html.slice(match.index, Math.min(html.length, match.index + 6000));
+    const name = cleanHtml(firstMatch(block, /alt="([^"]*?)\s+cover"/i)) || cleanHtml(firstMatch(block, /<a\s+href="https:\/\/weebcentral\.com\/series\/[^"]+"[^>]*>([\s\S]*?)<\/a>/i));
+    if (!path || !name || titleScore(title, name) < 0.15) continue;
 
     results.push({
       id: `weebcentral:${path}`,
       provider: "weebcentral",
       title: name,
-      description: cleanHtml(firstMatch(nearby, /<strong>Tag\(s\):\s*<\/strong>([\s\S]*?)<\/div>/i)),
-      status: cleanHtml(match[5]) || "unknown",
-      year: cleanHtml(match[4]),
-      cover: decodeXml(match[2]),
+      description: cleanHtml(firstMatch(block, /<strong[^>]*>Tag\(s\):\s*<\/strong>([\s\S]*?)<\/div>/i)),
+      status: cleanHtml(firstMatch(block, /<strong>Status:<\/strong>\s*<span>([^<]*)<\/span>/i)) || "unknown",
+      year: cleanHtml(firstMatch(block, /<strong>Year:<\/strong>\s*<span>([^<]*)<\/span>/i)),
+      cover: decodeXml(firstMatch(block, /<img\s+src="([^"]*)"/i)),
       chapterCount: 0,
       score: titleScore(title, name),
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function searchWeebCentralSitemap(title) {
+  const xml = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}/sitemap.xml`);
+  const results = [];
+  const seen = new Set();
+  const pattern = /<loc>https:\/\/weebcentral\.com(\/series\/[^<]+)<\/loc>/gi;
+  let match;
+
+  while ((match = pattern.exec(xml))) {
+    const path = decodeXml(match[1]);
+    if (seen.has(path)) continue;
+    const slug = decodeURIComponent(path.split("/").pop() || "").replace(/[-_]+/g, " ");
+    const score = titleScore(title, slug);
+    if (score < 0.65) continue;
+    seen.add(path);
+    results.push({
+      id: `weebcentral:${path}`,
+      provider: "weebcentral",
+      title: cleanHtml(slug),
+      description: "",
+      status: "unknown",
+      year: "",
+      cover: "",
+      chapterCount: 0,
+      score,
     });
   }
 
