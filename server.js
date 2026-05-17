@@ -17,6 +17,8 @@ const FLAMECOMICS_BASE_URL = "https://flamecomics.xyz";
 const FLAMECOMICS_CDN_URL = "https://cdn.flamecomics.xyz";
 const RIZZCOMIC_BASE_URL = "https://rizzcomic.com";
 const TOONILY_BASE_URL = "https://toonily.com";
+const ANIWAVES_BASE_URL = "https://aniwaves.ru";
+const HSTREAM_BASE_URL = "https://hstream.moe";
 
 const app = express();
 const cache = new Map();
@@ -99,6 +101,48 @@ app.get("/api/torrents/manga", async (req, res, next) => {
     ], ["3_1", "3_0"]);
 
     res.json(results);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/search", async (req, res, next) => {
+  try {
+    const title = cleanQuery(req.query.title);
+    if (!title) {
+      res.status(400).json({ error: "title is required" });
+      return;
+    }
+
+    res.json(await searchAniwavesAnime(title));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/adult/search", async (req, res, next) => {
+  try {
+    const title = cleanQuery(req.query.title);
+    if (!title) {
+      res.status(400).json({ error: "title is required" });
+      return;
+    }
+
+    res.json(await searchHstreamAdult(title));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/adult/streams", async (req, res, next) => {
+  try {
+    const url = validateHttpUrl(req.query.url);
+    if (!url || !url.startsWith(`${HSTREAM_BASE_URL}/hentai/`)) {
+      res.status(400).json({ error: "valid hstream url is required" });
+      return;
+    }
+
+    res.json(await getHstreamAdultStreams(url));
   } catch (error) {
     next(error);
   }
@@ -296,9 +340,14 @@ app.get("/api/stremio/search-streams", async (req, res, next) => {
 
 app.use((error, req, res, next) => {
   const isTimeout = error.name === "AbortError" || error.code === "UPSTREAM_TIMEOUT";
-  const status = error.status || (isTimeout ? 504 : 500);
-  console.error(isTimeout ? `Upstream request timed out: ${error.url || req.originalUrl}` : error);
-  res.status(status).json({ error: isTimeout ? "Upstream request timed out" : "Backend request failed" });
+  const isUpstreamHttpError = Boolean(error.url && error.status && error.status >= 400);
+  const status = isTimeout ? 504 : isUpstreamHttpError ? 502 : error.status || 500;
+  console.error(isTimeout
+    ? `Upstream request timed out: ${error.url || req.originalUrl}`
+    : isUpstreamHttpError
+      ? `Upstream request failed: ${error.status} ${error.message} ${error.url}`
+      : error);
+  res.status(status).json({ error: isTimeout ? "Upstream request timed out" : isUpstreamHttpError ? `Upstream source returned ${error.status}` : "Backend request failed" });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
@@ -315,6 +364,182 @@ async function searchNyaaRss(queries, categories) {
     }
   }
   return [];
+}
+
+async function searchAniwavesAnime(title) {
+  const data = await fetchJsonCached(`${ANIWAVES_BASE_URL}/ajax/anime/search?keyword=${encodeURIComponent(title)}`, {
+    headers: {
+      "Accept": "application/json,text/javascript,*/*;q=0.01",
+      "Referer": `${ANIWAVES_BASE_URL}/home`,
+      "X-Requested-With": "XMLHttpRequest",
+    },
+  });
+  const html = String(data.result?.html || "");
+  return parseAniwavesSearchResults(html, title);
+}
+
+function parseAniwavesSearchResults(html, query) {
+  const results = [];
+  const itemRegex = /<a\b[^>]*class="[^"]*\bitem\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = itemRegex.exec(html)) && results.length < 10) {
+    const itemHtml = match[2];
+    const titleMatch = itemHtml.match(/<div\b[^>]*class="[^"]*\bname\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    const title = stripHtml(titleMatch?.[1] || "");
+    if (!title) continue;
+
+    const image = firstMatch(itemHtml, /<img\b[^>]*src="([^"]+)"/i);
+    const meta = [...itemHtml.matchAll(/<span\b[^>]*class="[^"]*\bdot\b[^"]*"[^>]*>([\s\S]*?)<\/span>/gi)].map((metaMatch) => stripHtml(metaMatch[1])).filter(Boolean);
+    results.push({
+      provider: "aniwaves",
+      id: match[1].replace(/^\/watch\//, ""),
+      title,
+      url: absolutizeUrl(match[1], ANIWAVES_BASE_URL),
+      image: absolutizeUrl(image, ANIWAVES_BASE_URL),
+      rating: meta[0] || "",
+      score: meta[1] || "",
+      type: meta[2] || "",
+      date: meta[3] || "",
+      matchScore: titleScore(query, title),
+    });
+  }
+  return results.sort((a, b) => b.matchScore - a.matchScore);
+}
+
+async function searchHstreamAdult(title) {
+  const html = await fetchTextCached(`${HSTREAM_BASE_URL}/search?search=${encodeURIComponent(title)}`);
+  const results = [];
+  const seen = new Set();
+  const pattern = /<a\s+class="[^"]*hover:text-blue-600[^"]*"\s+href="(https:\/\/hstream\.moe\/hentai\/[^"]+)"[\s\S]*?<img\s+alt="([^"]*)"[\s\S]*?src="([^"]*)"/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const url = decodeXml(match[1]);
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const titleText = cleanHtml(match[2]);
+    const score = titleScore(title, titleText);
+    if (!titleText || score < 0.15) continue;
+    const nearby = html.slice(Math.max(0, match.index - 400), Math.min(html.length, match.index + 1800));
+    const quality = cleanHtml(firstMatch(nearby, /<p[^>]*bg-rose-700[^>]*>\s*([\s\S]*?)<\/p>/i));
+
+    results.push({
+      id: `hstream:${new URL(url).pathname}`,
+      provider: "hstream",
+      adult: true,
+      title: titleText,
+      url,
+      image: absolutizeUrl(decodeXml(match[3]), HSTREAM_BASE_URL),
+      quality,
+      score,
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function getHstreamAdultStreams(pageUrl) {
+  const { html, cookie } = await fetchHstreamPageSession(pageUrl);
+  const episodeId = firstMatch(html, /id="e_id"\s+type="hidden"\s+value="([^"]+)"/i) || firstMatch(html, /value="([^"]+)"\s+[^>]*id="e_id"/i);
+  const token = firstMatch(html, /name="_token"\s+value="([^"]+)"/i) || firstMatch(html, /name="csrf-token"\s+content="([^"]+)"/i);
+  if (!episodeId || !token) {
+    const error = new Error("Could not read hstream player metadata");
+    error.status = 502;
+    throw error;
+  }
+
+  const data = await postHstreamPlayerApi(pageUrl, episodeId, token, cookie);
+  const domains = asArray(data.stream_domains).filter(Boolean);
+  const streamPath = hstreamStreamPath(data.stream_url);
+  const firstDomain = domains[0] || "";
+  const sources = [];
+
+  if (firstDomain && streamPath) {
+    sources.push({ name: "hstream 720p MP4", quality: "720p", type: "video/mp4", url: `${firstDomain}/${streamPath}/x264.720p.mp4` });
+    sources.push({ name: "hstream 720p DASH", quality: "720p", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/720/manifest.mpd` });
+    sources.push({ name: "hstream 1080p DASH", quality: "1080p", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/1080/manifest.mpd` });
+    sources.push({ name: "hstream 2160p DASH", quality: "2160p", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/2160/manifest.mpd` });
+    if (Number(data.interpolated) === 1) sources.push({ name: "hstream 1080p48 DASH", quality: "1080p48", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/1080i/manifest.mpd` });
+    if (Number(data.interpolated_uhd) === 1) sources.push({ name: "hstream 2160p48 DASH", quality: "2160p48", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/2160i/manifest.mpd` });
+  }
+
+  return {
+    provider: "hstream",
+    adult: true,
+    title: cleanHtml(data.title || "hstream"),
+    pageUrl,
+    poster: absolutizeUrl(data.poster || "", HSTREAM_BASE_URL),
+    domains,
+    sources,
+  };
+}
+
+async function fetchHstreamPageSession(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 AniTrack/1.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const cookies = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [response.headers.get("set-cookie")].filter(Boolean);
+    return { html: await response.text(), cookie: cookies.map((item) => item.split(";")[0]).join("; ") };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function postHstreamPlayerApi(pageUrl, episodeId, token, cookie) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${HSTREAM_BASE_URL}/player/api`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 AniTrack/1.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-CSRF-TOKEN": token,
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": pageUrl,
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      body: JSON.stringify({ episode_id: episodeId }),
+    });
+    if (!response.ok) {
+      const error = new Error(`${response.status} ${response.statusText}`);
+      error.status = response.status;
+      error.url = `${HSTREAM_BASE_URL}/player/api`;
+      throw error;
+    }
+    return response.json();
+  } catch (error) {
+    if (error.name === "AbortError") {
+      const timeoutError = new Error(`Upstream request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+      timeoutError.name = "UpstreamTimeoutError";
+      timeoutError.code = "UPSTREAM_TIMEOUT";
+      timeoutError.status = 504;
+      timeoutError.url = `${HSTREAM_BASE_URL}/player/api`;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function hstreamStreamPath(value) {
+  return String(value || "").split("/").filter(Boolean).map((part) => encodeURIComponent(part)).join("/");
+}
+
+function stripHtml(value) {
+  return decodeXml(String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
 }
 
 async function searchStremioByTitle({ manifestUrl, title, episode, malId, anilistId }) {
@@ -790,7 +1015,7 @@ async function getWeebCentralPages(path) {
 }
 
 async function searchFlameComicsManga(title) {
-  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}/browse`);
+  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}/browse`, { headers: flameComicsHeaders("/browse") });
   const data = parseNextData(html);
   const entries = collectObjects(data).filter((item) => item && item.series_id && item.title);
   const seen = new Set();
@@ -826,7 +1051,7 @@ function flameComicsCoverUrl(seriesId, cover) {
 
 async function getFlameComicsChapters(path) {
   const safePath = path.startsWith("/") ? path : `/${path}`;
-  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}${safePath}`);
+  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}${safePath}`, { headers: flameComicsHeaders(safePath) });
   const data = parseNextData(html);
   const entries = collectObjects(data).filter((item) => item && (item.chapter_id || item.slug || item.hash || item.token) && (item.title || item.chapter || item.number));
   const seriesPath = firstMatch(safePath, /^\/series\/[^/]+/i) || safePath.replace(/\/$/, "");
@@ -918,9 +1143,24 @@ function cleanChapterNumber(value) {
 
 async function getFlameComicsPages(path) {
   const safePath = path.startsWith("/") ? path : `/${path}`;
-  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}${safePath}`);
+  const html = await fetchTextCached(`${FLAMECOMICS_BASE_URL}${safePath}`, { headers: flameComicsHeaders(safePath) });
   return uniqueMatches(html, /https:\/\/cdn\.flamecomics\.xyz\/uploads\/images\/series\/[^"'\\<\s]+?\.(?:webp|jpg|jpeg|png|gif)(?:\?\d+)?/gi)
     .filter((url) => !/\/thumbnail\.|\/cover\./i.test(url));
+}
+
+function flameComicsHeaders(path = "/") {
+  const url = `${FLAMECOMICS_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  return {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Referer": `${FLAMECOMICS_BASE_URL}/browse`,
+    "Origin": FLAMECOMICS_BASE_URL,
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "X-Current-URL": url,
+  };
 }
 
 async function searchRizzComicManga(title) {
