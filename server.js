@@ -12,6 +12,7 @@ const NYAA_RSS_URL = "https://nyaa.si/";
 const MANGADEX_API_URL = "https://api.mangadex.org";
 const ASURA_BASE_URL = "https://asurascans.com";
 const MANGAKATANA_BASE_URL = "https://mangakatana.com";
+const WEEBCENTRAL_BASE_URL = "https://weebcentral.com";
 
 const app = express();
 const cache = new Map();
@@ -108,15 +109,17 @@ app.get("/api/manga/search", async (req, res, next) => {
     }
     const providers = providerSet(req.query.providers);
 
-    const [mangaDexResults, asuraResults, mangaKatanaResults] = await Promise.allSettled([
+    const [mangaDexResults, asuraResults, mangaKatanaResults, weebCentralResults] = await Promise.allSettled([
       providers.has("mangadex") ? searchMangaDexManga(title) : [],
       providers.has("asura") ? searchAsuraManga(title) : [],
       providers.has("mangakatana") ? searchMangaKatanaManga(title) : [],
+      providers.has("weebcentral") ? searchWeebCentralManga(title) : [],
     ]);
     res.json([
       ...(mangaDexResults.status === "fulfilled" ? mangaDexResults.value : []),
       ...(asuraResults.status === "fulfilled" ? asuraResults.value : []),
       ...(mangaKatanaResults.status === "fulfilled" ? mangaKatanaResults.value : []),
+      ...(weebCentralResults.status === "fulfilled" ? weebCentralResults.value : []),
     ]);
   } catch (error) {
     next(error);
@@ -138,6 +141,11 @@ app.get("/api/manga/chapters", async (req, res, next) => {
 
     if (mangaId.startsWith("mangakatana:")) {
       res.json(await getMangaKatanaChapters(mangaId.slice(12)));
+      return;
+    }
+
+    if (mangaId.startsWith("weebcentral:")) {
+      res.json(await getWeebCentralChapters(mangaId.slice(12)));
       return;
     }
 
@@ -176,6 +184,11 @@ app.get("/api/manga/pages", async (req, res, next) => {
 
     if (chapterId.startsWith("mangakatana:")) {
       res.json({ pages: await getMangaKatanaPages(chapterId.slice(12)) });
+      return;
+    }
+
+    if (chapterId.startsWith("weebcentral:")) {
+      res.json({ pages: await getWeebCentralPages(chapterId.slice(12)) });
       return;
     }
 
@@ -554,6 +567,134 @@ async function getMangaKatanaPages(path) {
   return pages;
 }
 
+async function searchWeebCentralManga(title) {
+  const html = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}/search/data?${new URLSearchParams([
+    ["text", title],
+    ["display_mode", "Full Display"],
+  ]).toString()}`);
+  const results = [];
+  const seen = new Set();
+  const pattern = /<article\b[\s\S]*?<a\s+href="https:\/\/weebcentral\.com(\/series\/[^"]+)"[\s\S]*?<img\s+src="([^"]*)"\s+alt="([^"]*?)\s+cover"[\s\S]*?<strong>Year:<\/strong>\s*<span>([^<]*)<\/span>[\s\S]*?<strong>Status:<\/strong>\s*<span>([^<]*)<\/span>/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const path = decodeXml(match[1]);
+    if (seen.has(path)) continue;
+    seen.add(path);
+
+    const name = cleanHtml(match[3]);
+    if (!name) continue;
+    const nearby = html.slice(match.index, Math.min(html.length, match.index + 6000));
+
+    results.push({
+      id: `weebcentral:${path}`,
+      provider: "weebcentral",
+      title: name,
+      description: cleanHtml(firstMatch(nearby, /<strong>Tag\(s\):\s*<\/strong>([\s\S]*?)<\/div>/i)),
+      status: cleanHtml(match[5]) || "unknown",
+      year: cleanHtml(match[4]),
+      cover: decodeXml(match[2]),
+      chapterCount: 0,
+      score: titleScore(title, name),
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function getWeebCentralChapters(path) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}${safePath}`);
+  const chapters = [];
+  const seen = new Set();
+  const pattern = /<a\s+href="https:\/\/weebcentral\.com(\/chapters\/[^"]+)"\s+class="[^"]*hover:bg-base-300[^"]*"[\s\S]*?<span\s+class="">\s*([^<]+?)\s*<\/span>[\s\S]*?<time[^>]*datetime="([^"]+)"/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const chapterPath = decodeXml(match[1]);
+    if (seen.has(chapterPath)) continue;
+    seen.add(chapterPath);
+
+    const title = cleanHtml(match[2]);
+    const number = firstMatch(title, /(?:Chapter|Ch\.?|Episode)\s*([\d.]+)/i) || firstMatch(title, /([\d.]+)/) || String(chapters.length + 1);
+    const date = cleanHtml(match[3]) || "Date TBA";
+
+    chapters.push({
+      id: `weebcentral:${chapterPath}`,
+      provider: "weebcentral",
+      number,
+      title: title || `Chapter ${number}`,
+      date: date !== "Date TBA" ? new Date(date).toLocaleDateString("en-US") : date,
+      description: title || `Chapter ${number}`,
+      pages: 1,
+    });
+  }
+
+  const firstChapterPath = chapters[chapters.length - 1]?.id?.replace(/^weebcentral:/, "") || firstMatch(html, /href="https:\/\/weebcentral\.com(\/chapters\/[^"]+)"/i);
+  const firstChapterId = firstMatch(firstChapterPath, /\/chapters\/([^/]+)/i);
+  if (firstChapterId) {
+    const seriesBasePath = firstMatch(safePath, /^(\/series\/[^/]+)/i) || safePath.replace(/\/$/, "");
+    const selectHtml = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}${seriesBasePath}/chapter-select?current_chapter=${encodeURIComponent(firstChapterId)}`);
+    const selectedTitle = cleanHtml(firstMatch(selectHtml, /<button\s+id="selected_chapter"[^>]*>([\s\S]*?)<\/button>/i));
+    const selected = selectedTitle ? [{ path: firstChapterPath, title: selectedTitle }] : [];
+    const selectorChapters = selected;
+    const selectorSeen = new Set(selected.map((item) => item.path));
+    const selectorPattern = /<a\s+href="https:\/\/weebcentral\.com(\/chapters\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let selectorMatch;
+
+    while ((selectorMatch = selectorPattern.exec(selectHtml))) {
+      const chapterPath = decodeXml(selectorMatch[1]);
+      if (selectorSeen.has(chapterPath)) continue;
+      selectorSeen.add(chapterPath);
+      selectorChapters.push({ path: chapterPath, title: cleanHtml(selectorMatch[2]) });
+    }
+
+    if (selectorChapters.length > chapters.length) {
+      return selectorChapters.map((chapter, index) => {
+        const number = firstMatch(chapter.title, /(?:Chapter|Ch\.?|Episode)\s*([\d.]+)/i) || firstMatch(chapter.title, /([\d.]+)/) || String(index + 1);
+        return {
+          id: `weebcentral:${chapter.path}`,
+          provider: "weebcentral",
+          number,
+          title: chapter.title || `Chapter ${number}`,
+          date: "Date TBA",
+          description: chapter.title || `Chapter ${number}`,
+          pages: 1,
+        };
+      }).filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+    }
+  }
+
+  return chapters
+    .filter((chapter) => chapter.number !== "0")
+    .sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+async function getWeebCentralPages(path) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const chapterUrl = `${WEEBCENTRAL_BASE_URL}${safePath}`;
+  const html = await fetchTextCached(`${chapterUrl}/images?is_prev=False&current_page=1&reading_style=long_strip`, {
+    headers: {
+      "HX-Request": "true",
+      "HX-Current-URL": chapterUrl,
+      "Referer": chapterUrl,
+    },
+  });
+  const pages = [];
+  const seen = new Set();
+  const pattern = /https:\/\/[^"'\\<\s]+?\.(?:webp|jpg|jpeg|png|gif)/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const url = decodeXml(match[0]);
+    if (seen.has(url)) continue;
+    seen.add(url);
+    pages.push(url);
+  }
+
+  return pages;
+}
+
 function cleanHtml(value) {
   return decodeXml(String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
 }
@@ -651,6 +792,7 @@ async function fetchTextCached(url, options = {}) {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 AniTrack/1.0",
         "Accept": "application/json,text/plain,*/*",
         "Accept-Language": "en-US,en;q=0.9",
+        ...(options.headers || {}),
       },
     });
     if (response.status === 404 && options.emptyOn404) return "";
@@ -690,7 +832,7 @@ function pathSegment(value) {
 }
 
 function providerSet(value) {
-  const allowed = new Set(["mangadex", "asura", "mangakatana"]);
+  const allowed = new Set(["mangadex", "asura", "mangakatana", "weebcentral"]);
   const selected = String(value || "").split(",").map((item) => item.trim().toLowerCase()).filter((item) => allowed.has(item));
   return new Set(selected.length ? selected : allowed);
 }
