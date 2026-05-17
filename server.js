@@ -11,6 +11,7 @@ const MANGA_REPO_URL = "https://raw.githubusercontent.com/keiyoushi/extensions/r
 const NYAA_RSS_URL = "https://nyaa.si/";
 const MANGADEX_API_URL = "https://api.mangadex.org";
 const ASURA_BASE_URL = "https://asurascans.com";
+const MANGAKATANA_BASE_URL = "https://mangakatana.com";
 
 const app = express();
 const cache = new Map();
@@ -105,21 +106,17 @@ app.get("/api/manga/search", async (req, res, next) => {
       res.status(400).json({ error: "title is required" });
       return;
     }
+    const providers = providerSet(req.query.providers);
 
-    const data = await fetchJsonCached(`${MANGADEX_API_URL}/manga?${new URLSearchParams([
-      ["title", title],
-      ["limit", "10"],
-      ["includes[]", "cover_art"],
-      ["availableTranslatedLanguage[]", "en"],
-      ["contentRating[]", "safe"],
-      ["contentRating[]", "suggestive"],
-      ["order[relevance]", "desc"],
-    ]).toString()}`);
-
-    const [asuraResults] = await Promise.allSettled([searchAsuraManga(title)]);
+    const [mangaDexResults, asuraResults, mangaKatanaResults] = await Promise.allSettled([
+      providers.has("mangadex") ? searchMangaDexManga(title) : [],
+      providers.has("asura") ? searchAsuraManga(title) : [],
+      providers.has("mangakatana") ? searchMangaKatanaManga(title) : [],
+    ]);
     res.json([
-      ...asArray(data.data).map(mapMangaDexManga),
+      ...(mangaDexResults.status === "fulfilled" ? mangaDexResults.value : []),
       ...(asuraResults.status === "fulfilled" ? asuraResults.value : []),
+      ...(mangaKatanaResults.status === "fulfilled" ? mangaKatanaResults.value : []),
     ]);
   } catch (error) {
     next(error);
@@ -136,6 +133,11 @@ app.get("/api/manga/chapters", async (req, res, next) => {
 
     if (mangaId.startsWith("asura:")) {
       res.json(await getAsuraChapters(mangaId.slice(6)));
+      return;
+    }
+
+    if (mangaId.startsWith("mangakatana:")) {
+      res.json(await getMangaKatanaChapters(mangaId.slice(12)));
       return;
     }
 
@@ -169,6 +171,11 @@ app.get("/api/manga/pages", async (req, res, next) => {
 
     if (chapterId.startsWith("asura:")) {
       res.json({ pages: await getAsuraPages(chapterId.slice(6)) });
+      return;
+    }
+
+    if (chapterId.startsWith("mangakatana:")) {
+      res.json({ pages: await getMangaKatanaPages(chapterId.slice(12)) });
       return;
     }
 
@@ -353,6 +360,19 @@ function mapMangaDexManga(item) {
   };
 }
 
+async function searchMangaDexManga(title) {
+  const data = await fetchJsonCached(`${MANGADEX_API_URL}/manga?${new URLSearchParams([
+    ["title", title],
+    ["limit", "10"],
+    ["includes[]", "cover_art"],
+    ["availableTranslatedLanguage[]", "en"],
+    ["contentRating[]", "safe"],
+    ["contentRating[]", "suggestive"],
+    ["order[relevance]", "desc"],
+  ]).toString()}`);
+  return asArray(data.data).map(mapMangaDexManga);
+}
+
 function mapMangaDexChapter(item) {
   const attrs = item.attributes || {};
   return {
@@ -441,6 +461,91 @@ async function getAsuraPages(path) {
 
   while ((match = pattern.exec(html))) {
     const url = decodeXml(match[0]).replace(/&quot.*$/i, "");
+    if (seen.has(url)) continue;
+    seen.add(url);
+    pages.push(url);
+  }
+
+  return pages;
+}
+
+async function searchMangaKatanaManga(title) {
+  const html = await fetchTextCached(`${MANGAKATANA_BASE_URL}/?search=${encodeURIComponent(title)}&search_by=m_name`);
+  const results = [];
+  const seen = new Set();
+  const pattern = /<h3 class="title">[\s\S]*?<a href="(https:\/\/mangakatana\.com\/manga\/[^\"]+)"[^>]*>([\s\S]*?)<\/a>(?:<span>\s*-\s*Update chapter\s*([^<]+)<\/span>)?/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const url = new URL(decodeXml(match[1]));
+    const path = url.pathname;
+    if (seen.has(path)) continue;
+    seen.add(path);
+
+    const name = cleanHtml(match[2]);
+    if (!name) continue;
+
+    const nearby = html.slice(Math.max(0, match.index - 1200), Math.min(html.length, match.index + 2200));
+    const cover = decodeXml(firstMatch(nearby, /<img\s+src="([^"]+)"/i));
+    const description = cleanHtml(firstMatch(nearby, /<div class="summary[^"]*">([\s\S]*?)<\/div>/i));
+    const latest = Number.parseFloat(cleanHtml(match[3] || "0"));
+
+    results.push({
+      id: `mangakatana:${path}`,
+      provider: "mangakatana",
+      title: name,
+      description,
+      status: cleanHtml(firstMatch(nearby, /<div class="status[^"]*">[\s\S]*?<\/i>\s*([^<]+)<\/div>/i)) || "unknown",
+      year: "",
+      cover,
+      chapterCount: Number.isFinite(latest) ? latest : 0,
+      score: titleScore(title, name),
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function getMangaKatanaChapters(path) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${MANGAKATANA_BASE_URL}${safePath}`);
+  const chapters = [];
+  const seen = new Set();
+  const pattern = /<a href="(https:\/\/mangakatana\.com\/manga\/[^\"]+\/c([^\"]+))"[^>]*>([\s\S]*?)<\/a>[\s\S]{0,260}?<div class="update_time">([^<]*)<\/div>/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const url = new URL(decodeXml(match[1]));
+    const chapterPath = url.pathname;
+    if (seen.has(chapterPath)) continue;
+    seen.add(chapterPath);
+
+    const number = decodeXml(match[2]).replace(/^c/i, "");
+    const title = cleanHtml(match[3]) || `Chapter ${number}`;
+    chapters.push({
+      id: `mangakatana:${chapterPath}`,
+      provider: "mangakatana",
+      number,
+      title,
+      date: cleanHtml(match[4]) || "Date TBA",
+      description: title,
+      pages: 1,
+    });
+  }
+
+  return chapters.sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+async function getMangaKatanaPages(path) {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const html = await fetchTextCached(`${MANGAKATANA_BASE_URL}${safePath}`);
+  const pages = [];
+  const seen = new Set();
+  const pattern = /https:\/\/i\d+\.mangakatana\.com\/token\/[^'"\s]+?\.(?:jpg|jpeg|png|webp)/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const url = decodeXml(match[0]);
     if (seen.has(url)) continue;
     seen.add(url);
     pages.push(url);
@@ -582,6 +687,12 @@ function validateHttpUrl(value) {
 
 function pathSegment(value) {
   return encodeURIComponent(value).replace(/%3A/gi, ":");
+}
+
+function providerSet(value) {
+  const allowed = new Set(["mangadex", "asura", "mangakatana"]);
+  const selected = String(value || "").split(",").map((item) => item.trim().toLowerCase()).filter((item) => allowed.has(item));
+  return new Set(selected.length ? selected : allowed);
 }
 
 function parseLimit(value, fallback) {
