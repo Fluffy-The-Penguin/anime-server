@@ -435,7 +435,7 @@ async function searchHstreamAdult(title) {
     });
   }
 
-  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+  return results.sort((a, b) => b.score - a.score);
 }
 
 async function getHstreamAdultStreams(pageUrl) {
