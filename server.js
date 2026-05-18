@@ -641,7 +641,7 @@ async function searchAnimeDex(title) {
 }
 
 function isProviderUnavailableError(error) {
-  return Boolean(error?.url && [403, 429, 503].includes(Number(error.status)));
+  return Boolean(error?.url && [403, 429, 500, 502, 503, 504].includes(Number(error.status)));
 }
 
 async function getAnimeDexEpisodes({ animeId, anilistId }) {
