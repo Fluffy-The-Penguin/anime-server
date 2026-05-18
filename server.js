@@ -53,6 +53,11 @@ app.post("/api/anilist", async (req, res, next) => {
       return;
     }
 
+    if (body.variables?.source === "jikan") {
+      res.json(await fallbackAniListResponse(body));
+      return;
+    }
+
     try {
       const data = await postJson(ANILIST_URL, { query: body.query, variables: body.variables || {} }, {
         headers: { Origin: "https://anilist.co", Referer: "https://anilist.co/" },
@@ -514,6 +519,7 @@ function jikanToAniListAnime(item) {
   return {
     id: item.mal_id,
     idMal: item.mal_id,
+    dataSource: "jikan",
     title: { romaji: item.title || "", english: item.title_english || item.title || "", native: item.title_japanese || "" },
     synonyms: asArray(item.title_synonyms),
     description: item.synopsis || "",
@@ -536,6 +542,8 @@ function jikanToAniListManga(item) {
   if (!item) return null;
   return {
     id: item.mal_id,
+    idMal: item.mal_id,
+    dataSource: "jikan",
     title: { romaji: item.title || "", english: item.title_english || item.title || "", native: item.title_japanese || "" },
     synonyms: asArray(item.title_synonyms),
     description: item.synopsis || "",
