@@ -453,14 +453,16 @@ async function getHstreamAdultStreams(pageUrl) {
   const streamPath = hstreamStreamPath(data.stream_url);
   const firstDomain = domains[0] || "";
   const sources = [];
+  const tracks = firstDomain && streamPath ? [{ kind: "subtitles", label: "English", srclang: "en", url: `${firstDomain}/${streamPath}/eng.vtt` }] : [];
 
   if (firstDomain && streamPath) {
-    sources.push({ name: "hstream 720p MP4", quality: "720p", type: "video/mp4", url: `${firstDomain}/${streamPath}/x264.720p.mp4` });
-    sources.push({ name: "hstream 720p DASH", quality: "720p", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/720/manifest.mpd` });
-    sources.push({ name: "hstream 1080p DASH", quality: "1080p", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/1080/manifest.mpd` });
-    sources.push({ name: "hstream 2160p DASH", quality: "2160p", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/2160/manifest.mpd` });
-    if (Number(data.interpolated) === 1) sources.push({ name: "hstream 1080p48 DASH", quality: "1080p48", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/1080i/manifest.mpd` });
-    if (Number(data.interpolated_uhd) === 1) sources.push({ name: "hstream 2160p48 DASH", quality: "2160p48", type: "application/dash+xml", url: `${firstDomain}/${streamPath}/2160i/manifest.mpd` });
+    const hstreamSource = (name, quality, type, url) => ({ name, quality, type, url, tracks });
+    sources.push(hstreamSource("hstream 720p MP4", "720p", "video/mp4", `${firstDomain}/${streamPath}/x264.720p.mp4`));
+    sources.push(hstreamSource("hstream 720p DASH", "720p", "application/dash+xml", `${firstDomain}/${streamPath}/720/manifest.mpd`));
+    sources.push(hstreamSource("hstream 1080p DASH", "1080p", "application/dash+xml", `${firstDomain}/${streamPath}/1080/manifest.mpd`));
+    sources.push(hstreamSource("hstream 2160p DASH", "2160p", "application/dash+xml", `${firstDomain}/${streamPath}/2160/manifest.mpd`));
+    if (Number(data.interpolated) === 1) sources.push(hstreamSource("hstream 1080p48 DASH", "1080p48", "application/dash+xml", `${firstDomain}/${streamPath}/1080i/manifest.mpd`));
+    if (Number(data.interpolated_uhd) === 1) sources.push(hstreamSource("hstream 2160p48 DASH", "2160p48", "application/dash+xml", `${firstDomain}/${streamPath}/2160i/manifest.mpd`));
   }
 
   return {
@@ -470,6 +472,7 @@ async function getHstreamAdultStreams(pageUrl) {
     pageUrl,
     poster: absolutizeUrl(data.poster || "", HSTREAM_BASE_URL),
     domains,
+    tracks,
     sources,
   };
 }
