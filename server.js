@@ -133,6 +133,10 @@ app.get("/api/anime/animedex/search", async (req, res, next) => {
 
     res.json(await searchAnimeDex(title));
   } catch (error) {
+    if (isProviderUnavailableError(error)) {
+      res.json([]);
+      return;
+    }
     next(error);
   }
 });
@@ -176,6 +180,10 @@ app.get("/api/anime/anizone/search", async (req, res, next) => {
 
     res.json(await searchAniZone(title));
   } catch (error) {
+    if (isProviderUnavailableError(error)) {
+      res.json([]);
+      return;
+    }
     next(error);
   }
 });
@@ -517,6 +525,10 @@ async function searchAnimeDex(title) {
     episodeCount: item.episodes?.total || item.episodes?.sub || item.totalEpisodes || 0,
     score: titleScore(title, item.name || item.title || item.id),
   })).filter((item) => item.id && item.title && item.score >= 0.2).sort((a, b) => b.score - a.score);
+}
+
+function isProviderUnavailableError(error) {
+  return Boolean(error?.url && [403, 429, 503].includes(Number(error.status)));
 }
 
 async function getAnimeDexEpisodes({ animeId, anilistId }) {
