@@ -952,6 +952,7 @@ function titleScore(query, candidate) {
   const b = normalizeTitle(candidate);
   if (!a || !b) return 0;
   if (a === b) return 1;
+  if (a.replace(/\s+/g, "") === b.replace(/\s+/g, "")) return 0.95;
   if (b.includes(a) || a.includes(b)) return 0.82;
   const aTokens = new Set(a.split(" ").filter(Boolean));
   const bTokens = new Set(b.split(" ").filter(Boolean));
