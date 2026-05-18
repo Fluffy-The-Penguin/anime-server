@@ -716,7 +716,7 @@ function proxyAniZoneUrl(url) {
 function isAllowedAniZoneMediaUrl(url) {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "https:" && (parsed.hostname === "suzaku.xin-cdn.xyz" || parsed.hostname.endsWith(".xin-cdn.xyz"));
+    return parsed.protocol === "https:" && (parsed.hostname.endsWith(".xin-cdn.xyz") || parsed.hostname.endsWith(".vid-cdn.xyz"));
   } catch (error) {
     return false;
   }
