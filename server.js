@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import { Readable } from "node:stream";
 
 const PORT = Number(process.env.PORT || process.env.SERVER_PORT || process.env.P_SERVER_PORT || process.env.APP_PORT || 3000);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
@@ -19,6 +20,8 @@ const RIZZCOMIC_BASE_URL = "https://rizzcomic.com";
 const TOONILY_BASE_URL = "https://toonily.com";
 const ANIWAVES_BASE_URL = "https://aniwaves.ru";
 const HSTREAM_BASE_URL = "https://hstream.moe";
+const ANIMEDEX_BASE_URL = "https://animedex.pp.ua";
+const ANIZONE_BASE_URL = "https://anizone.to";
 
 const app = express();
 const cache = new Map();
@@ -115,6 +118,99 @@ app.get("/api/anime/search", async (req, res, next) => {
     }
 
     res.json(await searchAniwavesAnime(title));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/animedex/search", async (req, res, next) => {
+  try {
+    const title = cleanQuery(req.query.title);
+    if (!title) {
+      res.status(400).json({ error: "title is required" });
+      return;
+    }
+
+    res.json(await searchAnimeDex(title));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/animedex/episodes", async (req, res, next) => {
+  try {
+    const animeId = cleanQuery(req.query.animeId);
+    const anilistId = cleanQuery(req.query.anilistId);
+    if (!animeId && !anilistId) {
+      res.status(400).json({ error: "animeId or anilistId is required" });
+      return;
+    }
+
+    res.json(await getAnimeDexEpisodes({ animeId, anilistId }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/animedex/streams", async (req, res, next) => {
+  try {
+    const episodeId = cleanQuery(req.query.episodeId || req.query.id);
+    if (!episodeId) {
+      res.status(400).json({ error: "episodeId is required" });
+      return;
+    }
+
+    res.json(await getAnimeDexStreams(episodeId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/anizone/search", async (req, res, next) => {
+  try {
+    const title = cleanQuery(req.query.title);
+    if (!title) {
+      res.status(400).json({ error: "title is required" });
+      return;
+    }
+
+    res.json(await searchAniZone(title));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/anizone/episodes", async (req, res, next) => {
+  try {
+    const animeId = cleanQuery(req.query.animeId);
+    if (!animeId) {
+      res.status(400).json({ error: "animeId is required" });
+      return;
+    }
+
+    res.json(await getAniZoneEpisodes(animeId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/anizone/streams", async (req, res, next) => {
+  try {
+    const episodeUrl = validateHttpUrl(req.query.episodeUrl || req.query.url);
+    if (!episodeUrl || !episodeUrl.startsWith(`${ANIZONE_BASE_URL}/anime/`)) {
+      res.status(400).json({ error: "valid AniZone episodeUrl is required" });
+      return;
+    }
+
+    res.json(await getAniZoneStreams(episodeUrl));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/anizone/proxy", async (req, res, next) => {
+  try {
+    await proxyAniZoneMedia(req, res);
   } catch (error) {
     next(error);
   }
@@ -404,6 +500,234 @@ function parseAniwavesSearchResults(html, query) {
     });
   }
   return results.sort((a, b) => b.matchScore - a.matchScore);
+}
+
+async function searchAnimeDex(title) {
+  const data = await fetchJsonCached(`${ANIMEDEX_BASE_URL}/api/anime/search?q=${encodeURIComponent(title)}&page=1`);
+  return asArray(data.animes).map((item) => ({
+    provider: "animedex",
+    id: item.id,
+    anilistId: item.anilistId || "",
+    malId: item.malId || "",
+    title: cleanHtml(item.name || item.title || item.id),
+    nativeTitle: cleanHtml(item.jname || ""),
+    url: `${ANIMEDEX_BASE_URL}/watch/${encodeURIComponent(item.id)}/ep-1`,
+    image: item.poster || item.image || "",
+    banner: item.banner || "",
+    episodeCount: item.episodes?.total || item.episodes?.sub || item.totalEpisodes || 0,
+    score: titleScore(title, item.name || item.title || item.id),
+  })).filter((item) => item.id && item.title && item.score >= 0.2).sort((a, b) => b.score - a.score);
+}
+
+async function getAnimeDexEpisodes({ animeId, anilistId }) {
+  if (anilistId) {
+    const data = await postJson(`${ANIMEDEX_BASE_URL}/api/stream/sources`, { action: "episodes", anilistId });
+    const episodes = [...asArray(data.sub).map((item) => ({ ...item, audio: "sub" })), ...asArray(data.dub).map((item) => ({ ...item, audio: "dub" }))];
+    if (episodes.length) return episodes.map((episode, index) => animeDexEpisodeRow(episode, index));
+  }
+
+  const data = await fetchJsonCached(`${ANIMEDEX_BASE_URL}/api/anime/episodes/${encodeURIComponent(animeId)}`);
+  return asArray(data.episodes).map((episode, index) => animeDexEpisodeRow({ ...episode, id: `${animeId}:${episode.epSlug || episode.number}` }, index));
+}
+
+function animeDexEpisodeRow(episode, index) {
+  const number = episode.number || index + 1;
+  return {
+    id: episode.id || String(number),
+    provider: "animedex",
+    number,
+    title: cleanHtml(episode.title || `Episode ${number}`),
+    date: episode.airDate || "",
+    duration: episode.duration || 0,
+    image: episode.image || "",
+    description: cleanHtml(episode.description || ""),
+    audio: episode.audio || "sub",
+  };
+}
+
+async function getAnimeDexStreams(episodeId) {
+  const data = await postJson(`${ANIMEDEX_BASE_URL}/api/stream/sources`, { action: "sources", episodeId });
+  return {
+    provider: "animedex",
+    sources: asArray(data.sources).filter((source) => source?.url && (source.isHLS || String(source.url).includes(".m3u8"))).map((source, index) => ({
+      name: `AnimeDex ${source.quality || index + 1}`,
+      quality: source.quality || "auto",
+      type: source.isHLS || String(source.url).includes(".m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4",
+      url: source.url,
+      referer: source.referer || "",
+      isHLS: Boolean(source.isHLS || String(source.url).includes(".m3u8")),
+      tracks: normalizeTrackList(data.subtitles),
+    })),
+    tracks: normalizeTrackList(data.subtitles),
+    intro: data.intro || null,
+    outro: data.outro || null,
+  };
+}
+
+async function searchAniZone(title) {
+  const html = await fetchTextCached(`${ANIZONE_BASE_URL}/anime?search=${encodeURIComponent(title)}`);
+  const results = [];
+  const seen = new Set();
+  const linkRegex = /<a\b[^>]*href="(https:\/\/anizone\.to\/anime\/([a-z0-9-]+))"[^>]*title="([^"]+)"[^>]*>/gi;
+  let match;
+  while ((match = linkRegex.exec(html))) {
+    const url = decodeXml(match[1]);
+    const id = decodeXml(match[2]);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const titleText = cleanHtml(match[3]);
+    const nearby = html.slice(Math.max(0, match.index - 1200), Math.min(html.length, match.index + 1200));
+    const image = firstMatch(nearby, /<img\b[^>]*src="([^"]+)"/i);
+    results.push({
+      provider: "anizone",
+      id,
+      title: titleText,
+      url,
+      image: absolutizeUrl(image, ANIZONE_BASE_URL),
+      score: titleScore(title, titleText),
+    });
+  }
+  return results.filter((item) => item.score >= 0.2).sort((a, b) => b.score - a.score);
+}
+
+async function getAniZoneEpisodes(animeId) {
+  const slug = animeId.replace(/^anizone:/, "").replace(/[^a-z0-9-]/gi, "");
+  const html = await fetchTextCached(`${ANIZONE_BASE_URL}/anime/${slug}`);
+  const links = [];
+  const seen = new Set();
+  const linkRegex = new RegExp(`href="(https:\\/\\/anizone\\.to\\/anime\\/${escapeRegex(slug)}\\/(\\d+))"`, "gi");
+  let match;
+  while ((match = linkRegex.exec(html))) {
+    const url = decodeXml(match[1]);
+    const number = Number(match[2]);
+    if (!number || seen.has(number)) continue;
+    seen.add(number);
+    links.push({
+      id: url,
+      provider: "anizone",
+      number,
+      title: `Episode ${number}`,
+      date: "",
+      url,
+      description: "AniZone direct HLS episode.",
+    });
+  }
+  return links.sort((a, b) => a.number - b.number);
+}
+
+async function getAniZoneStreams(episodeUrl) {
+  const html = await fetchTextCached(episodeUrl, { headers: { Referer: ANIZONE_BASE_URL } });
+  const streamUrl = firstMatch(html, /<media-player\b[^>]*\bsrc="([^"]+\.m3u8[^"]*)"/i);
+  if (!streamUrl) {
+    const error = new Error("AniZone stream URL not found");
+    error.status = 404;
+    throw error;
+  }
+  const tracks = [...html.matchAll(/<track\b[^>]*src=([^\s>]+)[^>]*label="([^"]+)"[^>]*srclang="([^"]+)"/gi)].map((match) => ({
+    kind: "subtitles",
+    label: cleanHtml(match[2]),
+    srclang: match[3],
+    url: proxyAniZoneUrl(decodeXml(match[1].replace(/^['"]|['"]$/g, ""))),
+  }));
+  return {
+    provider: "anizone",
+    sources: [{
+      name: "AniZone HLS",
+      quality: "auto",
+      type: "application/vnd.apple.mpegurl",
+      url: proxyAniZoneUrl(streamUrl),
+      isHLS: true,
+      tracks,
+    }],
+    tracks,
+  };
+}
+
+async function proxyAniZoneMedia(req, res) {
+  const target = validateHttpUrl(req.query.url);
+  if (!target || !isAllowedAniZoneMediaUrl(target)) {
+    res.status(400).json({ error: "valid AniZone media url is required" });
+    return;
+  }
+
+  const response = await fetch(target, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 AniTrack/1.0",
+      "Accept": "*/*",
+      "Referer": `${ANIZONE_BASE_URL}/`,
+      ...(req.headers.range ? { Range: req.headers.range } : {}),
+    },
+  });
+  if (!response.ok) {
+    res.status(response.status).send(await response.text().catch(() => response.statusText));
+    return;
+  }
+
+  const contentType = response.headers.get("content-type") || contentTypeForUrl(target);
+  res.status(response.status);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Content-Type", contentType);
+  ["content-length", "content-range", "accept-ranges", "cache-control"].forEach((header) => {
+    const value = response.headers.get(header);
+    if (value) res.setHeader(header, value);
+  });
+
+  if (target.includes(".m3u8") || contentType.includes("mpegurl")) {
+    const text = await response.text();
+    res.send(rewriteM3u8ForAniZone(text, target));
+    return;
+  }
+
+  if (!response.body) {
+    res.end();
+    return;
+  }
+  Readable.fromWeb(response.body).pipe(res);
+}
+
+function rewriteM3u8ForAniZone(text, manifestUrl) {
+  return String(text || "")
+    .replace(/URI="([^"]+)"/g, (_, uri) => `URI="${proxyAniZoneUrl(new URL(uri, manifestUrl).toString())}"`)
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return line;
+      return proxyAniZoneUrl(new URL(trimmed, manifestUrl).toString());
+    })
+    .join("\n");
+}
+
+function proxyAniZoneUrl(url) {
+  return `/api/anime/anizone/proxy?url=${encodeURIComponent(url)}`;
+}
+
+function isAllowedAniZoneMediaUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && (parsed.hostname === "suzaku.xin-cdn.xyz" || parsed.hostname.endsWith(".xin-cdn.xyz"));
+  } catch (error) {
+    return false;
+  }
+}
+
+function normalizeTrackList(tracks) {
+  return asArray(tracks).filter((track) => track?.url || track?.file).map((track, index) => ({
+    kind: track.kind || "subtitles",
+    label: track.label || track.lang || track.srclang || `Subtitle ${index + 1}`,
+    srclang: track.srclang || track.lang || "en",
+    url: track.url || track.file,
+  }));
+}
+
+function contentTypeForUrl(url) {
+  const path = new URL(url).pathname.toLowerCase();
+  if (path.endsWith(".m3u8")) return "application/vnd.apple.mpegurl";
+  if (path.endsWith(".ts")) return "video/mp2t";
+  if (path.endsWith(".m4s")) return "video/iso.segment";
+  if (path.endsWith(".key")) return "application/octet-stream";
+  if (path.endsWith(".vtt")) return "text/vtt";
+  if (path.endsWith(".ass")) return "text/plain";
+  return "application/octet-stream";
 }
 
 async function searchHstreamAdult(title) {
@@ -1422,6 +1746,44 @@ function buildMagnetLink(infoHash, name) {
 async function fetchJsonCached(url, options = {}) {
   const text = await fetchTextCached(url, options);
   return text ? JSON.parse(text) : {};
+}
+
+async function postJson(url, body, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 AniTrack/1.0",
+        "Accept": "application/json,text/plain,*/*",
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+      body: JSON.stringify(body || {}),
+    });
+    if (!response.ok) {
+      const error = new Error(`${response.status} ${response.statusText}`);
+      error.status = response.status;
+      error.url = url;
+      throw error;
+    }
+    const text = await response.text();
+    return text ? JSON.parse(text) : {};
+  } catch (error) {
+    if (error.name === "AbortError") {
+      const timeoutError = new Error(`Upstream request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+      timeoutError.name = "UpstreamTimeoutError";
+      timeoutError.code = "UPSTREAM_TIMEOUT";
+      timeoutError.status = 504;
+      timeoutError.url = url;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function fetchTextCached(url, options = {}) {
