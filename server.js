@@ -1235,11 +1235,11 @@ function parseWeebCentralSearchResults(html, title) {
   const blocks = String(html || "").split(/(?=<article\b[^>]*class="[^"]*bg-base-300)/i);
 
   for (const block of blocks) {
-    const path = decodeXml(firstMatch(block, /href="https:\/\/weebcentral\.com(\/series\/[^"]+)"/i));
+    const path = decodeXml(firstMatch(block, /href="(?:https:\/\/weebcentral\.com)?(\/series\/[^"]+)"/i));
     if (seen.has(path)) continue;
     seen.add(path);
 
-    const name = cleanHtml(firstMatch(block, /alt="([^"]*?)\s+cover"/i)) || cleanHtml(firstMatch(block, /<a\s+href="https:\/\/weebcentral\.com\/series\/[^"]+"[^>]*>([\s\S]*?)<\/a>/i));
+    const name = cleanHtml(firstMatch(block, /alt="([^"]*?)\s+cover"/i)) || cleanHtml(firstMatch(block, /<a\s+href="(?:https:\/\/weebcentral\.com)?\/series\/[^"]+"[^>]*>([\s\S]*?)<\/a>/i));
     if (!path || !name || titleScore(title, name) < 0.15) continue;
 
     results.push({
@@ -1290,6 +1290,12 @@ async function searchWeebCentralSitemap(title) {
 
 async function getWeebCentralChapters(path) {
   const safePath = path.startsWith("/") ? path : `/${path}`;
+  try {
+    return await getWeebCentralChaptersFromRss(safePath);
+  } catch (error) {
+    console.warn(`WeebCentral RSS chapters failed, trying series page: ${error.status || error.message}`);
+  }
+
   const html = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}${safePath}`);
   const chapters = [];
   const seen = new Set();
@@ -1354,6 +1360,75 @@ async function getWeebCentralChapters(path) {
   return chapters
     .filter((chapter) => chapter.number !== "0")
     .sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+async function getWeebCentralChaptersFromRss(seriesPath) {
+  const seriesId = firstMatch(seriesPath, /^\/series\/([^/]+)/i);
+  if (!seriesId) return [];
+
+  const rss = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}/series/${encodeURIComponent(seriesId)}/rss`, {
+    headers: { Accept: "application/rss+xml,application/xml,text/xml,*/*" },
+  });
+  const firstChapterPath = firstMatch(rss, /<link>https:\/\/weebcentral\.com(\/chapters\/[^<]+)<\/link>/i);
+  const firstChapterId = firstMatch(firstChapterPath, /\/chapters\/([^/]+)/i);
+  if (!firstChapterId) return parseWeebCentralRssChapters(rss);
+
+  const selectHtml = await fetchTextCached(`${WEEBCENTRAL_BASE_URL}/series/${encodeURIComponent(seriesId)}/chapter-select?current_chapter=${encodeURIComponent(firstChapterId)}`, {
+    headers: {
+      "HX-Request": "true",
+      "HX-Current-URL": `${WEEBCENTRAL_BASE_URL}${seriesPath}`,
+      "Referer": `${WEEBCENTRAL_BASE_URL}${seriesPath}`,
+    },
+  });
+  const selectedTitle = cleanHtml(firstMatch(selectHtml, /<button\s+id="selected_chapter"[^>]*>([\s\S]*?)<\/button>/i));
+  const chapters = selectedTitle ? [{ path: firstChapterPath, title: selectedTitle }] : [];
+  const seen = new Set(chapters.map((chapter) => chapter.path));
+  const pattern = /<a\s+href="https:\/\/weebcentral\.com(\/chapters\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+
+  while ((match = pattern.exec(selectHtml))) {
+    const chapterPath = decodeXml(match[1]);
+    if (seen.has(chapterPath)) continue;
+    seen.add(chapterPath);
+    chapters.push({ path: chapterPath, title: cleanHtml(match[2]) });
+  }
+
+  if (!chapters.length) return parseWeebCentralRssChapters(rss);
+
+  return chapters.map((chapter, index) => {
+    const number = firstMatch(chapter.title, /(?:Chapter|Ch\.?|Episode|#)\s*([\d.]+)/i) || firstMatch(chapter.title, /([\d.]+)/) || String(index + 1);
+    return {
+      id: `weebcentral:${chapter.path}`,
+      provider: "weebcentral",
+      number,
+      title: chapter.title || `Chapter ${number}`,
+      date: "Date TBA",
+      description: chapter.title || `Chapter ${number}`,
+      pages: 1,
+    };
+  }).filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+function parseWeebCentralRssChapters(rss) {
+  const chapters = [];
+  const pattern = /<item>[\s\S]*?<title>([\s\S]*?)<\/title>[\s\S]*?<link>https:\/\/weebcentral\.com(\/chapters\/[^<]+)<\/link>[\s\S]*?<pubDate>([\s\S]*?)<\/pubDate>[\s\S]*?<\/item>/gi;
+  let match;
+
+  while ((match = pattern.exec(rss))) {
+    const title = cleanHtml(match[1]);
+    const number = firstMatch(title, /(?:Chapter|Ch\.?|Episode|#)\s*([\d.]+)/i) || firstMatch(title, /([\d.]+)/) || String(chapters.length + 1);
+    chapters.push({
+      id: `weebcentral:${decodeXml(match[2])}`,
+      provider: "weebcentral",
+      number,
+      title: title || `Chapter ${number}`,
+      date: cleanHtml(match[3]) ? new Date(cleanHtml(match[3])).toLocaleDateString("en-US") : "Date TBA",
+      description: title || `Chapter ${number}`,
+      pages: 1,
+    });
+  }
+
+  return chapters.filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
 }
 
 async function getWeebCentralPages(path) {
