@@ -1807,7 +1807,7 @@ function parsePornhwaProSearch(html, title) {
 
 async function searchHentai18(title) {
   const direct = await directAdultSeriesMatch({ provider: "hentai18", title, baseUrl: HENTAI18_BASE_URL, path: `/read-hentai/${slugifyTitle(title)}` });
-  const html = await fetchTextCached(`${HENTAI18_BASE_URL}/search/${encodeURIComponent(title).replace(/%20/g, "-")}`);
+  const html = await fetchTextCached(`${HENTAI18_BASE_URL}/search?s=${encodeURIComponent(title).replace(/%20/g, "+")}`);
   const results = [];
   const seen = new Set();
   const pattern = /<li>[\s\S]*?(?=<li>|<\/ul>)/gi;
