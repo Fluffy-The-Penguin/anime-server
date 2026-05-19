@@ -2033,7 +2033,7 @@ function parse3HentaiSearch(html, title) {
     const block = match[0];
     const path = normalizeAdultPath(match[1], THREEHENTAI_BASE_URL, /^\/d\/\d+$/i);
     const cover = firstMatch(block, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
-    const imageBase = firstMatch(cover, /(https:\/\/s\d+\.3hentai\.net\/d\d+)\//i);
+    const imageBase = firstMatch(cover, /(https:\/\/s\d+\.3hentai\.(?:net|xyz)\/d\d+)\//i);
     const idPath = imageBase ? `${path}|${imageBase}` : path;
     if (!path || seen.has(idPath)) continue;
     const name = cleanHtml(firstMatch(block, /<div\b[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/i) || firstMatch(block, /alt="([^"]+)"/i));
@@ -2047,7 +2047,7 @@ function parse3HentaiSearch(html, title) {
 function parse3HentaiId(id) {
   const [rawPath, rawImageBase] = String(id || "").split("|");
   const path = normalizeAdultPath(rawPath, THREEHENTAI_BASE_URL, /^\/d\/\d+$/i);
-  const imageBase = /^https:\/\/s\d+\.3hentai\.net\/d\d+$/i.test(rawImageBase || "") ? rawImageBase : "";
+  const imageBase = /^https:\/\/s\d+\.3hentai\.(?:net|xyz)\/d\d+$/i.test(rawImageBase || "") ? rawImageBase : "";
   return { path, imageBase };
 }
 
@@ -2131,7 +2131,7 @@ async function adultGalleryPageImages(provider, html, baseUrl = "", path = "") {
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/i\d*\.hentaifox\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, `$1.${extension}`)));
   }
   if (provider === "3hentai") {
-    return sortAdultPageImages(uniqueMatches(html, /https:\/\/s\d+\.3hentai\.net\/d\d+\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.jpg")));
+    return sortAdultPageImages(uniqueMatches(html, /https:\/\/s\d+\.3hentai\.(?:net|xyz)\/d\d+\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.jpg")));
   }
   if (provider === "hentaiera") {
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/m\d+\.hentaiera\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.webp")));
