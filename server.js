@@ -26,6 +26,9 @@ const HENTAI18_BASE_URL = "https://hentai18.net";
 const HENTAINAME_BASE_URL = "https://www.hentai.name";
 const HENTAIZAP_BASE_URL = "https://hentaizap.com";
 const HENTAIFOX_BASE_URL = "https://hentaifox.com";
+const THREEHENTAI_BASE_URL = "https://3hentai.net";
+const HENTAIERA_BASE_URL = "https://hentaiera.com";
+const HENTAICITY_BASE_URL = "https://www.hentaicity.com";
 const ANIWAVES_BASE_URL = "https://aniwaves.ru";
 const HSTREAM_BASE_URL = "https://hstream.moe";
 const ANIMEDEX_BASE_URL = "https://animedex.pp.ua";
@@ -265,7 +268,7 @@ app.get("/api/manga/search", async (req, res, next) => {
     }
     const providers = providerSet(req.query.providers);
 
-    const [mangaDexResults, asuraResults, mangaKatanaResults, weebCentralResults, flameComicsResults, rizzComicResults, toonilyResults, pornhwaZResults, hentai20Results, pornhwaProResults, hentai18Results, hentaiNameResults, hentaiZapResults, hentaiFoxResults] = await Promise.allSettled([
+    const [mangaDexResults, asuraResults, mangaKatanaResults, weebCentralResults, flameComicsResults, rizzComicResults, toonilyResults, pornhwaZResults, hentai20Results, pornhwaProResults, hentai18Results, hentaiNameResults, hentaiZapResults, hentaiFoxResults, threeHentaiResults, hentaiEraResults, hentaiCityResults] = await Promise.allSettled([
       providers.has("mangadex") && !latest ? searchMangaDexManga(title) : [],
       providers.has("asura") && !latest ? searchAsuraManga(title) : [],
       providers.has("mangakatana") && !latest ? searchMangaKatanaManga(title) : [],
@@ -280,6 +283,9 @@ app.get("/api/manga/search", async (req, res, next) => {
       providers.has("hentainame") && !latest ? searchHentaiName(title) : [],
       providers.has("hentaizap") ? (latest ? latestHentaiZap() : searchHentaiZap(title)) : [],
       providers.has("hentaifox") ? (latest ? latestHentaiFox() : searchHentaiFox(title)) : [],
+      providers.has("3hentai") ? (latest ? latest3Hentai() : search3Hentai(title)) : [],
+      providers.has("hentaiera") ? (latest ? latestHentaiEra() : searchHentaiEra(title)) : [],
+      providers.has("hentaicity") ? (latest ? latestHentaiCity() : searchHentaiCity(title)) : [],
     ]);
     res.json([
       ...(mangaDexResults.status === "fulfilled" ? mangaDexResults.value : []),
@@ -296,6 +302,9 @@ app.get("/api/manga/search", async (req, res, next) => {
       ...(hentaiNameResults.status === "fulfilled" ? hentaiNameResults.value : []),
       ...(hentaiZapResults.status === "fulfilled" ? hentaiZapResults.value : []),
       ...(hentaiFoxResults.status === "fulfilled" ? hentaiFoxResults.value : []),
+      ...(threeHentaiResults.status === "fulfilled" ? threeHentaiResults.value : []),
+      ...(hentaiEraResults.status === "fulfilled" ? hentaiEraResults.value : []),
+      ...(hentaiCityResults.status === "fulfilled" ? hentaiCityResults.value : []),
     ]);
   } catch (error) {
     next(error);
@@ -1861,12 +1870,42 @@ async function latestHentaiFox() {
   return parseAdultGallerySearch({ html, title: "", provider: "hentaifox", baseUrl: HENTAIFOX_BASE_URL, pathPattern: /^\/gallery\/\d+\/?$/i });
 }
 
+async function search3Hentai(title) {
+  const html = await fetchTextCached(`${THREEHENTAI_BASE_URL}/search?q=${encodeURIComponent(`${title} language:english`)}`, { headers: { Referer: THREEHENTAI_BASE_URL } });
+  return parse3HentaiSearch(html, title);
+}
+
+async function latest3Hentai() {
+  const html = await fetchTextCached(`${THREEHENTAI_BASE_URL}/search?q=language%3Aenglish`, { headers: { Referer: THREEHENTAI_BASE_URL } });
+  return parse3HentaiSearch(html, "");
+}
+
+async function searchHentaiEra(title) {
+  const html = await fetchTextCached(`${HENTAIERA_BASE_URL}/search/?key=${encodeURIComponent(title)}&mg=1&dj=1&ws=1&is=1&ac=1&gc=1&en=1&jp=0&es=0&fr=0&kr=0&de=0&ru=0&lt=1`, { headers: { Referer: HENTAIERA_BASE_URL } });
+  return parseHentaiEraSearch(html, title);
+}
+
+async function latestHentaiEra() {
+  const html = await fetchTextCached(`${HENTAIERA_BASE_URL}/search/?mg=1&dj=1&ws=1&is=1&ac=1&gc=1&en=1&jp=0&es=0&fr=0&kr=0&de=0&ru=0&lt=1`, { headers: { Referer: HENTAIERA_BASE_URL } });
+  return parseHentaiEraSearch(html, "");
+}
+
+async function searchHentaiCity(title) {
+  const html = await fetchTextCached(`${HENTAICITY_BASE_URL}/customsearch.php?view=search&search_type=gallery&search=${encodeURIComponent(title)}&main_cat=0`, { headers: { Referer: HENTAICITY_BASE_URL } });
+  return parseHentaiCitySearch(html, title);
+}
+
+async function latestHentaiCity() {
+  const html = await fetchTextCached(`${HENTAICITY_BASE_URL}/galleries/`, { headers: { Referer: HENTAICITY_BASE_URL } });
+  return parseHentaiCitySearch(html, "");
+}
+
 async function getAdultMangaChapters(provider, id) {
   if (provider === "pornhwaz") return getPornhwaZChapters(id);
   if (provider === "hentai20") return getAdultChapters(id, HENTAI20_BASE_URL, "hentai20", /^\/manga\/[^/?#]+\/?$/i, /href="(https:\/\/hentai20\.io\/[^"#?{}]+chapter-[^"#?{}]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
   if (provider === "pornhwapro") return getAdultChapters(id, PORNHWAPRO_BASE_URL, "pornhwapro", /^\/manhwa\/[^/?#]+\/?$/i, /href="(\/manhwa\/[^"#?]+\/chapter-[^"#?]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
   if (provider === "hentai18") return getHentai18Chapters(id);
-  if (provider === "hentainame" || provider === "hentaizap" || provider === "hentaifox") return getAdultGalleryChapters(provider, id);
+  if (provider === "hentainame" || provider === "hentaizap" || provider === "hentaifox" || provider === "3hentai" || provider === "hentaiera" || provider === "hentaicity") return getAdultGalleryChapters(provider, id);
   return [];
 }
 
@@ -1875,7 +1914,7 @@ async function getAdultMangaPages(provider, id) {
   if (provider === "hentai20") return getAdultPages(id, HENTAI20_BASE_URL, /https:\/\/img\.hentai1\.io\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
   if (provider === "pornhwapro") return getAdultPages(id, PORNHWAPRO_BASE_URL, /https:\/\/[^"'<>\s]*manhwature\.com\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
   if (provider === "hentai18") return getAdultPages(id, HENTAI18_BASE_URL, /https:\/\/cdn\.hentai18\.net\/images\/manga\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
-  if (provider === "hentainame" || provider === "hentaizap" || provider === "hentaifox") return getAdultGalleryPages(provider, id);
+  if (provider === "hentainame" || provider === "hentaizap" || provider === "hentaifox" || provider === "3hentai" || provider === "hentaiera" || provider === "hentaicity") return getAdultGalleryPages(provider, id);
   return [];
 }
 
@@ -1970,11 +2009,67 @@ function parseAdultGallerySearch({ html, title, provider, baseUrl, pathPattern }
   return results.sort((a, b) => b.score - a.score).slice(0, 10);
 }
 
+function parse3HentaiSearch(html, title) {
+  const results = [];
+  const seen = new Set();
+  const pattern = /<a\b[^>]*href="([^"]*\/d\/\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = pattern.exec(html))) {
+    const block = match[0];
+    const path = normalizeAdultPath(match[1], THREEHENTAI_BASE_URL, /^\/d\/\d+$/i);
+    if (!path || seen.has(path)) continue;
+    const name = cleanHtml(firstMatch(block, /<div\b[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/i) || firstMatch(block, /alt="([^"]+)"/i));
+    if (!name || !isEnglishAdultGalleryBlock("3hentai", block, name)) continue;
+    seen.add(path);
+    const cover = firstMatch(block, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
+    results.push(adultSourceResult({ provider: "3hentai", path, title: name, cover: absolutizeUrl(cover, THREEHENTAI_BASE_URL), score: Math.max(0.2, titleScore(title, name)) }));
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+function parseHentaiEraSearch(html, title) {
+  const results = [];
+  const seen = new Set();
+  const pattern = /<a\b[^>]*href="([^"]*\/gallery\/\d+\/)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = pattern.exec(html))) {
+    const block = match[0];
+    const path = normalizeAdultPath(match[1], HENTAIERA_BASE_URL, /^\/gallery\/\d+\/?$/i);
+    if (!path || seen.has(path)) continue;
+    const name = cleanHtml(firstMatch(block, /alt="([^"]+)"/i) || match[2]);
+    if (!name || !isEnglishAdultGalleryBlock("hentaiera", block, name)) continue;
+    seen.add(path);
+    const cover = firstMatch(block, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
+    results.push(adultSourceResult({ provider: "hentaiera", path, title: name, cover: absolutizeUrl(cover, HENTAIERA_BASE_URL), score: Math.max(0.2, titleScore(title, name)) }));
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+function parseHentaiCitySearch(html, title) {
+  const results = [];
+  const seen = new Set();
+  const pattern = /<a\b[^>]*href="([^"]*(?:\/click\/\d+-\d+)?\/gallery\/[^"?#]+\.html)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = pattern.exec(html))) {
+    const block = match[0];
+    const path = normalizeAdultPath(match[1], HENTAICITY_BASE_URL, /^\/(?:click\/\d+-\d+\/)?gallery\/[^/?#]+\.html$/i);
+    if (!path || seen.has(path)) continue;
+    const name = cleanHtml(firstMatch(block, /alt="([^"]+)"/i) || firstMatch(block, /title="([^"]+)"/i) || match[2]);
+    if (!name) continue;
+    seen.add(path);
+    const cover = firstMatch(block, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
+    results.push(adultSourceResult({ provider: "hentaicity", path, title: name, cover: absolutizeUrl(cover, HENTAICITY_BASE_URL), score: Math.max(0.2, titleScore(title, name)) }));
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
 function adultGalleryBaseUrl(provider) {
-  return ({ hentainame: HENTAINAME_BASE_URL, hentaizap: HENTAIZAP_BASE_URL, hentaifox: HENTAIFOX_BASE_URL }[provider] || "");
+  return ({ hentainame: HENTAINAME_BASE_URL, hentaizap: HENTAIZAP_BASE_URL, hentaifox: HENTAIFOX_BASE_URL, "3hentai": THREEHENTAI_BASE_URL, hentaiera: HENTAIERA_BASE_URL, hentaicity: HENTAICITY_BASE_URL }[provider] || "");
 }
 
 function adultGalleryPathPattern(provider) {
+  if (provider === "3hentai") return /^\/d\/\d+$/i;
+  if (provider === "hentaicity") return /^\/(?:click\/\d+-\d+\/)?gallery\/[^/?#]+\.html$/i;
   return provider === "hentainame" ? /^\/g\/\d+\/?$/i : /^\/gallery\/\d+\/?$/i;
 }
 
@@ -1988,6 +2083,15 @@ async function adultGalleryPageImages(provider, html, baseUrl = "", path = "") {
   if (provider === "hentaifox") {
     const extension = await hentaifoxImageExtension(baseUrl, path);
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/i\d*\.hentaifox\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, `$1.${extension}`)));
+  }
+  if (provider === "3hentai") {
+    return sortAdultPageImages(uniqueMatches(html, /https:\/\/s\d+\.3hentai\.net\/d\d+\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.jpg")));
+  }
+  if (provider === "hentaiera") {
+    return sortAdultPageImages(uniqueMatches(html, /https:\/\/m\d+\.hentaiera\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.webp")));
+  }
+  if (provider === "hentaicity") {
+    return uniqueStrings(uniqueMatches(html, /https:\/\/cdn\d+\.images\.hentaicity\.com\/galleries\/[^"'<>\s]+?-t\.jpg/gi).map((url) => url.replace(/-t\.jpg(?:\?[^?]*)?$/i, ".jpg")));
   }
   return [];
 }
@@ -2016,6 +2120,8 @@ function isEnglishAdultGalleryBlock(provider, html, title) {
   if (provider === "hentainame") return /\[\s*english\s*\]/i.test(title || "");
   if (provider === "hentaizap") return /\/language\/english\/|fl_en|flag-gb|fl_gb|\[\s*english\s*\]|data-languages="[^"]*\b3\b/i.test(text);
   if (provider === "hentaifox") return /\/language\/english\/|flag-gb|fl_gb|\[\s*english\s*\]|data-languages="[^"]*\b2\b/i.test(text);
+  if (provider === "3hentai") return /flag-eng|\[\s*english\s*\]|language:\s*english/i.test(text);
+  if (provider === "hentaiera") return /\[\s*english\s*\]|flag-us|\ben\b/i.test(text);
   return true;
 }
 
@@ -2100,7 +2206,7 @@ function uniqueStrings(values) {
 
 function adultMangaProviderFromId(value) {
   const provider = String(value || "").split(":")[0];
-  return ["pornhwaz", "hentai20", "pornhwapro", "hentai18", "hentainame", "hentaizap", "hentaifox"].includes(provider) ? provider : "";
+  return ["pornhwaz", "hentai20", "pornhwapro", "hentai18", "hentainame", "hentaizap", "hentaifox", "3hentai", "hentaiera", "hentaicity"].includes(provider) ? provider : "";
 }
 
 function cleanHtml(value) {
@@ -2310,7 +2416,7 @@ function pathSegment(value) {
 }
 
 function providerSet(value) {
-  const allowed = new Set(["mangadex", "asura", "mangakatana", "weebcentral", "flamecomics", "rizzcomic", "toonily", "pornhwaz", "hentai20", "pornhwapro", "hentai18", "hentainame", "hentaizap", "hentaifox"]);
+  const allowed = new Set(["mangadex", "asura", "mangakatana", "weebcentral", "flamecomics", "rizzcomic", "toonily", "pornhwaz", "hentai20", "pornhwapro", "hentai18", "hentainame", "hentaizap", "hentaifox", "3hentai", "hentaiera", "hentaicity"]);
   const selected = String(value || "").split(",").map((item) => item.trim().toLowerCase()).filter((item) => allowed.has(item));
   return new Set(selected.length ? selected : allowed);
 }
