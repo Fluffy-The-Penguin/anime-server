@@ -9,7 +9,6 @@ const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 10 * 60 * 1000);
 
 const ANIME_REPO_URL = "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json";
 const MANGA_REPO_URL = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json";
-const NYAA_RSS_URL = "https://nyaa.si/";
 const MANGADEX_API_URL = "https://api.mangadex.org";
 const ANILIST_URL = "https://graphql.anilist.co";
 const JIKAN_BASE_URL = "https://api.jikan.moe/v4";
@@ -93,51 +92,6 @@ app.get("/api/extensions/manga", async (req, res, next) => {
     const data = await fetchJsonCached(MANGA_REPO_URL);
     const extensions = normalizeExtensions(data, "manga").slice(0, limit);
     res.json(extensions);
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/torrents/anime", async (req, res, next) => {
-  try {
-    const title = cleanQuery(req.query.title);
-    const episode = cleanQuery(req.query.episode);
-    if (!title || !episode) {
-      res.status(400).json({ error: "title and episode are required" });
-      return;
-    }
-
-    const paddedEpisode = String(episode).padStart(2, "0");
-    const results = await searchNyaaRss([
-      `${title} ${paddedEpisode}`,
-      `${title} ${episode}`,
-      `${title} - ${paddedEpisode}`,
-      `${title} - ${episode}`,
-      `${title} episode ${episode}`,
-    ], ["1_2", "1_0"]);
-
-    res.json(results);
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/torrents/manga", async (req, res, next) => {
-  try {
-    const title = cleanQuery(req.query.title);
-    const chapter = cleanQuery(req.query.chapter);
-    if (!title || !chapter) {
-      res.status(400).json({ error: "title and chapter are required" });
-      return;
-    }
-
-    const results = await searchNyaaRss([
-      `${title} chapter ${chapter}`,
-      `${title} ch ${chapter}`,
-      `${title} ${chapter}`,
-    ], ["3_1", "3_0"]);
-
-    res.json(results);
   } catch (error) {
     next(error);
   }
@@ -431,59 +385,6 @@ app.get("/api/manga/pages", async (req, res, next) => {
   }
 });
 
-app.get("/api/stremio/manifest", async (req, res, next) => {
-  try {
-    const url = validateHttpUrl(req.query.url);
-    if (!url) {
-      res.status(400).json({ error: "url is required" });
-      return;
-    }
-
-    const manifest = await fetchJsonCached(url);
-    res.json(manifest);
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/stremio/streams", async (req, res, next) => {
-  try {
-    const manifestUrl = validateHttpUrl(req.query.url);
-    const type = cleanQuery(req.query.type || "series");
-    const id = cleanQuery(req.query.id);
-    if (!manifestUrl || !type || !id) {
-      res.status(400).json({ error: "url, type, and id are required" });
-      return;
-    }
-
-    const baseUrl = manifestUrl.replace(/\/manifest\.json(?:\?.*)?$/i, "").replace(/\/+$/, "");
-    const streamUrl = `${baseUrl}/stream/${pathSegment(type)}/${pathSegment(id)}.json`;
-    const data = await fetchJsonCached(streamUrl, { emptyOn404: true });
-    res.json(data.streams || []);
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/stremio/search-streams", async (req, res, next) => {
-  try {
-    const manifestUrl = validateHttpUrl(req.query.url);
-    const title = cleanQuery(req.query.title);
-    const episode = cleanQuery(req.query.episode || "1");
-    const malId = cleanQuery(req.query.malId);
-    const anilistId = cleanQuery(req.query.anilistId);
-    if (!manifestUrl || !title) {
-      res.status(400).json({ error: "url and title are required" });
-      return;
-    }
-
-    const streams = await searchStremioByTitle({ manifestUrl, title, episode, malId, anilistId });
-    res.json(streams);
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.use((error, req, res, next) => {
   const isTimeout = error.name === "AbortError" || error.code === "UPSTREAM_TIMEOUT";
   const isUpstreamHttpError = Boolean(error.url && error.status && error.status >= 400);
@@ -577,18 +478,6 @@ function yearFromDate(value) {
 function parseDurationMinutes(value) {
   const match = /([0-9]+)\s*min/i.exec(String(value || ""));
   return match ? Number(match[1]) : 0;
-}
-
-async function searchNyaaRss(queries, categories) {
-  for (const category of categories) {
-    for (const query of queries) {
-      const params = new URLSearchParams({ page: "rss", q: query, c: category, f: "0" });
-      const xml = await fetchTextCached(`${NYAA_RSS_URL}?${params.toString()}`);
-      const results = parseNyaaRss(xml);
-      if (results.length) return results;
-    }
-  }
-  return [];
 }
 
 async function searchAniwavesAnime(title) {
@@ -1070,72 +959,6 @@ function hstreamStreamPath(value) {
 
 function stripHtml(value) {
   return decodeXml(String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
-}
-
-async function searchStremioByTitle({ manifestUrl, title, episode, malId, anilistId }) {
-  const baseUrl = addonBaseUrl(manifestUrl);
-  const manifest = await fetchJsonCached(manifestUrl);
-  const catalogs = asArray(manifest.catalogs).filter((catalog) => ["series", "anime", "movie"].includes(catalog.type));
-  const metas = [];
-
-  for (const catalog of catalogs) {
-    const supportsSearch = asArray(catalog.extra).some((extra) => extra.name === "search");
-    if (!supportsSearch && catalogs.length > 1) continue;
-
-    try {
-      const data = await fetchJsonCached(`${baseUrl}/catalog/${pathSegment(catalog.type)}/${pathSegment(catalog.id)}/search=${encodeURIComponent(title)}.json`, { emptyOn404: true });
-      asArray(data.metas).forEach((meta) => metas.push({ ...meta, type: catalog.type }));
-    } catch (error) {
-      // Try the next catalog.
-    }
-  }
-
-  const bestMetas = metas
-    .map((meta) => ({ ...meta, score: titleScore(title, meta.name || meta.title || "") }))
-    .filter((meta) => meta.score > 0.35)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
-
-  const fallbackIds = [];
-  if (malId) fallbackIds.push(`mal:${malId}:${episode}`, `mal:${malId}`);
-  if (anilistId) fallbackIds.push(`anilist:${anilistId}:${episode}`, `anilist:${anilistId}`);
-
-  for (const meta of bestMetas) {
-    const streamIds = await streamIdCandidates(baseUrl, meta, episode);
-    const streams = await firstStreamsForIds(baseUrl, meta.type, [...streamIds, ...fallbackIds]);
-    if (streams.length) return streams.map((stream) => ({ ...stream, matchedTitle: meta.name || meta.title, matchedId: meta.id }));
-  }
-
-  return firstStreamsForIds(baseUrl, "series", fallbackIds);
-}
-
-async function streamIdCandidates(baseUrl, meta, episode) {
-  const ids = [meta.id, `${meta.id}:${episode}`, `${meta.id}:1:${episode}`, `${meta.id}:0:${episode}`].filter(Boolean);
-  try {
-    const data = await fetchJsonCached(`${baseUrl}/meta/${pathSegment(meta.type)}/${pathSegment(meta.id)}.json`, { emptyOn404: true });
-    asArray(data.meta?.videos).forEach((video) => {
-      if (String(video.episode || "") === String(episode) || String(video.title || "").includes(String(episode))) ids.unshift(video.id);
-    });
-  } catch (error) {
-    // Meta endpoint is optional.
-  }
-  return [...new Set(ids)];
-}
-
-async function firstStreamsForIds(baseUrl, type, ids) {
-  for (const id of ids.filter(Boolean)) {
-    try {
-      const data = await fetchJsonCached(`${baseUrl}/stream/${pathSegment(type)}/${pathSegment(id)}.json`, { emptyOn404: true });
-      if (asArray(data.streams).length) return data.streams;
-    } catch (error) {
-      // Try next ID.
-    }
-  }
-  return [];
-}
-
-function addonBaseUrl(manifestUrl) {
-  return manifestUrl.replace(/\/manifest\.json(?:\?.*)?$/i, "").replace(/\/+$/, "");
 }
 
 function titleScore(query, candidate) {
@@ -1879,27 +1702,6 @@ function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function parseNyaaRss(xml) {
-  const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-  return items.map((item) => {
-    const infoHash = tagValue(item, "infoHash");
-    const name = tagValue(item, "title") || "Unknown torrent";
-    const link = tagValue(item, "link");
-
-    return {
-      name,
-      link,
-      magnet_uri: infoHash ? buildMagnetLink(infoHash, name) : link,
-      seeders: Number(tagValue(item, "seeders") || 0),
-      leechers: Number(tagValue(item, "leechers") || 0),
-      downloads: Number(tagValue(item, "downloads") || 0),
-      size: tagValue(item, "size"),
-      category: tagValue(item, "category"),
-      trusted: tagValue(item, "trusted"),
-    };
-  }).sort((a, b) => b.seeders - a.seeders);
-}
-
 function tagValue(xml, tag) {
   const match = xml.match(new RegExp(`<(?:\\w+:)?${tag}[^>]*>([\\s\\S]*?)<\\/(?:\\w+:)?${tag}>`, "i"));
   if (!match) return "";
@@ -1936,15 +1738,6 @@ function normalizeExtensions(data, type) {
       url: source.baseUrl || "",
     })),
   })).filter((ext) => ext.name && ext.url);
-}
-
-function buildMagnetLink(infoHash, name) {
-  const trackers = [
-    "udp://tracker.opentrackr.org:1337/announce",
-    "udp://open.stealth.si:80/announce",
-    "udp://tracker.openbittorrent.com:6969/announce",
-  ];
-  return `magnet:?xt=urn:btih:${encodeURIComponent(infoHash)}&dn=${encodeURIComponent(name)}${trackers.map((tracker) => `&tr=${encodeURIComponent(tracker)}`).join("")}`;
 }
 
 async function fetchJsonCached(url, options = {}) {

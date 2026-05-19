@@ -1,6 +1,6 @@
 # AniTrack Backend
 
-Node API used by AniTrack for torrent RSS lookup and extension catalog metadata.
+Node API used by AniTrack for AniList fallback data, extension catalog metadata, manga pages, and native anime source lookups.
 
 ## Local Run
 
@@ -26,10 +26,15 @@ curl http://localhost:3000/health
 ## Endpoints
 
 - `GET /health`
+- `POST /api/anilist`
 - `GET /api/extensions/anime?limit=50`
 - `GET /api/extensions/manga?limit=50`
-- `GET /api/torrents/anime?title=Frieren&episode=1`
-- `GET /api/torrents/manga?title=Berserk&chapter=1`
-- `GET /api/stremio/manifest?url=https://addon.example/manifest.json`
-- `GET /api/stremio/streams?url=https://addon.example/manifest.json&type=series&id=mal:123:1`
-- `GET /api/stremio/search-streams?url=https://addon.example/manifest.json&title=Frieren&episode=1`
+- `GET /api/manga/search?title=Berserk&providers=mangadex`
+- `GET /api/manga/chapters?mangaId=mangadex:...`
+- `GET /api/manga/pages?chapterId=mangadex:...`
+- `GET /api/anime/animedex/search?title=Bleach`
+- `GET /api/anime/animedex/episodes?animeId=...&anilistId=...`
+- `GET /api/anime/animedex/streams?episodeId=...`
+- `GET /api/anime/anizone/search?title=Bleach`
+- `GET /api/anime/anizone/episodes?animeId=...`
+- `GET /api/anime/anizone/streams?episodeUrl=...`
