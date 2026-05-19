@@ -1776,7 +1776,7 @@ async function searchHentai20(title) {
 }
 
 async function searchPornhwaPro(title) {
-  const direct = await directAdultSeriesMatch({ provider: "pornhwapro", title, baseUrl: PORNHWAPRO_BASE_URL, path: `/manhwa/${slugifyTitle(title)}/` });
+  const direct = await directAdultSeriesMatch({ provider: "pornhwapro", title, baseUrl: PORNHWAPRO_BASE_URL, paths: slugifyTitleVariants(title).map((slug) => `/manhwa/${slug}/`) });
   let html = await fetchTextCached(`${PORNHWAPRO_BASE_URL}/search/${encodeURIComponent(title).replace(/%20/g, "-")}/`);
   let results = parsePornhwaProSearch(html, title);
   if (!results.length && title.includes(" ")) {
@@ -1895,19 +1895,22 @@ function parseAdultSeriesMatches({ html, title, provider, baseUrl, pattern, path
   return results.sort((a, b) => b.score - a.score).slice(0, 10);
 }
 
-async function directAdultSeriesMatch({ provider, title, baseUrl, path }) {
-  if (!path || /\/\//.test(path)) return null;
-  let html = "";
-  try {
-    html = await fetchTextCached(`${baseUrl}${path}`, { headers: { Referer: baseUrl } });
-  } catch (error) {
-    return null;
+async function directAdultSeriesMatch({ provider, title, baseUrl, path, paths }) {
+  for (const candidatePath of uniqueStrings([path, ...(paths || [])])) {
+    if (!candidatePath || /\/\//.test(candidatePath)) continue;
+    let html = "";
+    try {
+      html = await fetchTextCached(`${baseUrl}${candidatePath}`, { headers: { Referer: baseUrl } });
+    } catch (error) {
+      continue;
+    }
+    if (!html || /<h1>\s*404 Not Found\s*<\/h1>/i.test(html)) continue;
+    const rawTitle = cleanHtml(firstMatch(html, /<meta\b[^>]*(?:property|name)="og:title"[^>]*content="([^"]+)"/i) || firstMatch(html, /<title[^>]*>([\s\S]*?)<\/title>/i));
+    const name = titleScore(title, rawTitle) >= 0.6 ? rawTitle : title;
+    const cover = firstMatch(html, /<meta\b[^>]*(?:property|name)="og:image"[^>]*content="([^"]+)"/i) || firstMatch(html, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
+    return adultSourceResult({ provider, path: candidatePath, title: name, cover: absolutizeUrl(cover, baseUrl), score: Math.max(0.95, titleScore(title, name)) });
   }
-  if (!html || /<h1>\s*404 Not Found\s*<\/h1>/i.test(html)) return null;
-  const rawTitle = cleanHtml(firstMatch(html, /<meta\b[^>]*(?:property|name)="og:title"[^>]*content="([^"]+)"/i) || firstMatch(html, /<title[^>]*>([\s\S]*?)<\/title>/i));
-  const name = titleScore(title, rawTitle) >= 0.6 ? rawTitle : title;
-  const cover = firstMatch(html, /<meta\b[^>]*(?:property|name)="og:image"[^>]*content="([^"]+)"/i) || firstMatch(html, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
-  return adultSourceResult({ provider, path, title: name, cover: absolutizeUrl(cover, baseUrl), score: Math.max(0.95, titleScore(title, name)) });
+  return null;
 }
 
 function adultChapterLinksFromHtml(html, provider, baseUrl, pattern) {
@@ -1956,6 +1959,15 @@ function normalizeAdultPath(value, baseUrl, pattern) {
 
 function slugifyTitle(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function slugifyTitleVariants(value) {
+  const text = String(value || "");
+  return uniqueStrings([slugifyTitle(text), slugifyTitle(text.replace(/['’]/g, ""))]).filter(Boolean);
+}
+
+function uniqueStrings(values) {
+  return [...new Set((values || []).map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
 function adultMangaProviderFromId(value) {
