@@ -19,6 +19,10 @@ const FLAMECOMICS_BASE_URL = "https://flamecomics.xyz";
 const FLAMECOMICS_CDN_URL = "https://cdn.flamecomics.xyz";
 const RIZZCOMIC_BASE_URL = "https://rizzcomic.com";
 const TOONILY_BASE_URL = "https://toonily.com";
+const PORNHWAZ_BASE_URL = "https://www.pornhwaz.com";
+const HENTAI20_BASE_URL = "https://hentai20.io";
+const PORNHWAPRO_BASE_URL = "https://pornhwa.pro";
+const HENTAI18_BASE_URL = "https://hentai18.net";
 const ANIWAVES_BASE_URL = "https://aniwaves.ru";
 const HSTREAM_BASE_URL = "https://hstream.moe";
 const ANIMEDEX_BASE_URL = "https://animedex.pp.ua";
@@ -257,7 +261,7 @@ app.get("/api/manga/search", async (req, res, next) => {
     }
     const providers = providerSet(req.query.providers);
 
-    const [mangaDexResults, asuraResults, mangaKatanaResults, weebCentralResults, flameComicsResults, rizzComicResults, toonilyResults] = await Promise.allSettled([
+    const [mangaDexResults, asuraResults, mangaKatanaResults, weebCentralResults, flameComicsResults, rizzComicResults, toonilyResults, pornhwaZResults, hentai20Results, pornhwaProResults, hentai18Results] = await Promise.allSettled([
       providers.has("mangadex") ? searchMangaDexManga(title) : [],
       providers.has("asura") ? searchAsuraManga(title) : [],
       providers.has("mangakatana") ? searchMangaKatanaManga(title) : [],
@@ -265,6 +269,10 @@ app.get("/api/manga/search", async (req, res, next) => {
       providers.has("flamecomics") ? searchFlameComicsManga(title) : [],
       providers.has("rizzcomic") ? searchRizzComicManga(title) : [],
       providers.has("toonily") ? searchToonilyManga(title) : [],
+      providers.has("pornhwaz") ? searchPornhwaZ(title) : [],
+      providers.has("hentai20") ? searchHentai20(title) : [],
+      providers.has("pornhwapro") ? searchPornhwaPro(title) : [],
+      providers.has("hentai18") ? searchHentai18(title) : [],
     ]);
     res.json([
       ...(mangaDexResults.status === "fulfilled" ? mangaDexResults.value : []),
@@ -274,6 +282,10 @@ app.get("/api/manga/search", async (req, res, next) => {
       ...(flameComicsResults.status === "fulfilled" ? flameComicsResults.value : []),
       ...(rizzComicResults.status === "fulfilled" ? rizzComicResults.value : []),
       ...(toonilyResults.status === "fulfilled" ? toonilyResults.value : []),
+      ...(pornhwaZResults.status === "fulfilled" ? pornhwaZResults.value : []),
+      ...(hentai20Results.status === "fulfilled" ? hentai20Results.value : []),
+      ...(pornhwaProResults.status === "fulfilled" ? pornhwaProResults.value : []),
+      ...(hentai18Results.status === "fulfilled" ? hentai18Results.value : []),
     ]);
   } catch (error) {
     next(error);
@@ -315,6 +327,12 @@ app.get("/api/manga/chapters", async (req, res, next) => {
 
     if (mangaId.startsWith("toonily:")) {
       res.json(await getToonilyChapters(mangaId.slice(8)));
+      return;
+    }
+
+    const adultProvider = adultMangaProviderFromId(mangaId);
+    if (adultProvider) {
+      res.json(await getAdultMangaChapters(adultProvider, mangaId.slice(adultProvider.length + 1)));
       return;
     }
 
@@ -373,6 +391,12 @@ app.get("/api/manga/pages", async (req, res, next) => {
 
     if (chapterId.startsWith("toonily:")) {
       res.json({ pages: await getToonilyPages(chapterId.slice(8)) });
+      return;
+    }
+
+    const adultProvider = adultMangaProviderFromId(chapterId);
+    if (adultProvider) {
+      res.json({ pages: await getAdultMangaPages(adultProvider, chapterId.slice(adultProvider.length + 1)) });
       return;
     }
 
@@ -1716,6 +1740,222 @@ async function getWordPressPages({ path, baseUrl, imagePattern }) {
     .filter((url) => !/logo|favicon|cropped|thumbnail|cover|avatar|banner|wp-content\/themes|wp-content\/plugins/i.test(url));
 }
 
+async function searchPornhwaZ(title) {
+  const direct = await directAdultSeriesMatch({ provider: "pornhwaz", title, baseUrl: PORNHWAZ_BASE_URL, path: `/webtoon/${slugifyTitle(title)}/` });
+  const html = await fetchTextCached(`${PORNHWAZ_BASE_URL}/?s=${encodeURIComponent(title).replace(/%20/g, "+")}&post_type=wp-manga`);
+  const results = parseAdultSeriesMatches({
+    html,
+    title,
+    provider: "pornhwaz",
+    baseUrl: PORNHWAZ_BASE_URL,
+    pattern: /<a\b[^>]*href="(https:\/\/www\.pornhwaz\.com\/webtoon\/[^"#?]+\/?)[^>]*"[^>]*(?:title="([^"]+)")?[^>]*>([\s\S]*?)<\/a>/gi,
+    pathPattern: /^\/webtoon\/[^/?#]+\/?$/i,
+  });
+  return mergeAdultResults(direct ? [direct] : [], results);
+}
+
+async function searchHentai20(title) {
+  const direct = await directAdultSeriesMatch({ provider: "hentai20", title, baseUrl: HENTAI20_BASE_URL, path: `/manga/${slugifyTitle(title)}/` });
+  const html = await fetchTextCached(`${HENTAI20_BASE_URL}/?s=${encodeURIComponent(title).replace(/%20/g, "+")}&post_type=wp-manga`);
+  const results = [];
+  const seen = new Set();
+  const pattern = /<div class="bsx">([\s\S]*?)(?=<div class="bsx">|<\/main>|<\/body>)/gi;
+  let match;
+  while ((match = pattern.exec(html))) {
+    const block = match[1];
+    const path = normalizeAdultPath(firstMatch(block, /<a\b[^>]*href="(https:\/\/hentai20\.io\/manga\/[^"#?]+\/?)[^>]*"/i), HENTAI20_BASE_URL, /^\/manga\/[^/?#]+\/?$/i);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    const name = cleanHtml(firstMatch(block, /title="([^"]+)"/i) || firstMatch(block, /<div class="tt">([\s\S]*?)<\/div>/i));
+    const score = titleScore(title, name);
+    if (!name || score < 0.15) continue;
+    const cover = firstMatch(block, /<img\b[^>]*src="([^"]+)"/i);
+    results.push(adultSourceResult({ provider: "hentai20", path, title: name, cover: absolutizeUrl(cover, HENTAI20_BASE_URL), score }));
+  }
+  return mergeAdultResults(direct ? [direct] : [], results);
+}
+
+async function searchPornhwaPro(title) {
+  const direct = await directAdultSeriesMatch({ provider: "pornhwapro", title, baseUrl: PORNHWAPRO_BASE_URL, path: `/manhwa/${slugifyTitle(title)}/` });
+  let html = await fetchTextCached(`${PORNHWAPRO_BASE_URL}/search/${encodeURIComponent(title).replace(/%20/g, "-")}/`);
+  let results = parsePornhwaProSearch(html, title);
+  if (!results.length && title.includes(" ")) {
+    html = await fetchTextCached(`${PORNHWAPRO_BASE_URL}/search/${encodeURIComponent(title.split(/\s+/)[0])}/`);
+    results = parsePornhwaProSearch(html, title);
+  }
+  return mergeAdultResults(direct ? [direct] : [], results);
+}
+
+function parsePornhwaProSearch(html, title) {
+  const results = [];
+  const seen = new Set();
+  const pattern = /<div class="overflow-hidden rounded-lg[\s\S]*?(?=<div class="overflow-hidden rounded-lg|<\/main>|<\/body>)/gi;
+  let match;
+  while ((match = pattern.exec(html))) {
+    const block = match[0];
+    const path = normalizeAdultPath(firstMatch(block, /<a\b[^>]*href="(\/manhwa\/[^"#?]+\/)"/i), PORNHWAPRO_BASE_URL, /^\/manhwa\/[^/?#]+\/?$/i);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    const name = cleanHtml(firstMatch(block, /<img\b[^>]*alt="([^"]+)"/i) || firstMatch(block, /<!--t=[^>]*-->([\s\S]*?)<!---->/i));
+    const score = titleScore(title, name);
+    if (!name || score < 0.15) continue;
+    const cover = firstMatch(block, /(?:data-src|src)="(https?:[^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
+    results.push(adultSourceResult({ provider: "pornhwapro", path, title: name, cover: absolutizeUrl(cover, PORNHWAPRO_BASE_URL), score }));
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function searchHentai18(title) {
+  const direct = await directAdultSeriesMatch({ provider: "hentai18", title, baseUrl: HENTAI18_BASE_URL, path: `/read-hentai/${slugifyTitle(title)}` });
+  const html = await fetchTextCached(`${HENTAI18_BASE_URL}/search/${encodeURIComponent(title).replace(/%20/g, "-")}`);
+  const results = [];
+  const seen = new Set();
+  const pattern = /<li>[\s\S]*?(?=<li>|<\/ul>)/gi;
+  let match;
+  while ((match = pattern.exec(html))) {
+    const block = match[0];
+    const path = normalizeAdultPath(firstMatch(block, /<h3 class="title">\s*<a\b[^>]*href="(https:\/\/hentai18\.net\/read-hentai\/[^"#?]+)"/i), HENTAI18_BASE_URL, /^\/read-hentai\/[^/?#]+$/i);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    const name = cleanHtml(firstMatch(block, /<h3 class="title">\s*<a\b[^>]*>[\s\S]*?([^<>]+)<\/a>/i));
+    const score = titleScore(title, name);
+    if (!name || score < 0.15) continue;
+    const cover = firstMatch(block, /data-original="([^"]+)"/i) || firstMatch(block, /<img\b[^>]*src="([^"]+)"/i);
+    results.push(adultSourceResult({ provider: "hentai18", path, title: name, cover: absolutizeUrl(cover, HENTAI18_BASE_URL), score }));
+  }
+  return mergeAdultResults(direct ? [direct] : [], results);
+}
+
+async function getAdultMangaChapters(provider, id) {
+  if (provider === "pornhwaz") return getAdultChapters(id, PORNHWAZ_BASE_URL, "pornhwaz", /^\/webtoon\/[^/?#]+\/?$/i, /href="(https?:\/\/[^"#?]+\/[^"#?]+\/chapter-[^"#?]+\/?|\/[^"#?]+\/chapter-[^"#?]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
+  if (provider === "hentai20") return getAdultChapters(id, HENTAI20_BASE_URL, "hentai20", /^\/manga\/[^/?#]+\/?$/i, /href="(https:\/\/hentai20\.io\/[^"#?{}]+chapter-[^"#?{}]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
+  if (provider === "pornhwapro") return getAdultChapters(id, PORNHWAPRO_BASE_URL, "pornhwapro", /^\/manhwa\/[^/?#]+\/?$/i, /href="(\/manhwa\/[^"#?]+\/chapter-[^"#?]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
+  if (provider === "hentai18") return getHentai18Chapters(id);
+  return [];
+}
+
+async function getAdultMangaPages(provider, id) {
+  if (provider === "pornhwaz") return getAdultPages(id, PORNHWAZ_BASE_URL, /https:\/\/cdn\.pornhwaz\.com\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
+  if (provider === "hentai20") return getAdultPages(id, HENTAI20_BASE_URL, /https:\/\/img\.hentai1\.io\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
+  if (provider === "pornhwapro") return getAdultPages(id, PORNHWAPRO_BASE_URL, /https:\/\/[^"'<>\s]*manhwature\.com\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
+  if (provider === "hentai18") return getAdultPages(id, HENTAI18_BASE_URL, /https:\/\/cdn\.hentai18\.net\/images\/manga\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
+  return [];
+}
+
+async function getAdultChapters(id, baseUrl, provider, seriesPattern, chapterPattern) {
+  const path = normalizeAdultPath(id, baseUrl, seriesPattern);
+  if (!path) return [];
+  const html = await fetchTextCached(`${baseUrl}${path}`, { headers: { Referer: baseUrl } });
+  return adultChapterLinksFromHtml(html, provider, baseUrl, chapterPattern);
+}
+
+async function getHentai18Chapters(id) {
+  const path = normalizeAdultPath(id, HENTAI18_BASE_URL, /^\/read-hentai\/[^/?#]+$/i);
+  if (!path) return [];
+  const html = await fetchTextCached(`${HENTAI18_BASE_URL}${path}`, { headers: { Referer: HENTAI18_BASE_URL } });
+  const chapters = adultChapterLinksFromHtml(html, "hentai18", HENTAI18_BASE_URL, /href="(\/read-hentai\/[^"#?]+chapter-[^"#?]+)"[^>]*title="([^"]+)"/gi);
+  if (chapters.length) return chapters;
+  const urls = uniqueMatches(html, /https:\/\/hentai18\.net\/read-hentai\/[^"'<>\s]+?chapter-[^"'<>\s]+/gi);
+  return urls.map((url, index) => {
+    const chapterPath = normalizeAdultPath(url, HENTAI18_BASE_URL, /^\/read-hentai\/[^/?#]+$/i);
+    const number = firstMatch(chapterPath, /chapter-([\d.]+)/i) || String(index + 1);
+    return { id: `hentai18:${chapterPath}`, provider: "hentai18", number, title: `Chapter ${number}`, date: "Date TBA", description: `Chapter ${number}`, pages: 1 };
+  }).filter((chapter) => chapter.id !== "hentai18:").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+async function getAdultPages(id, baseUrl, imagePattern) {
+  const path = normalizeAdultPath(id, baseUrl, /^\//i);
+  if (!path) return [];
+  const html = await fetchTextCached(`${baseUrl}${path}`, { headers: { Referer: `${baseUrl}${path}` } });
+  return uniqueMatches(html, imagePattern).filter((url) => !/logo|favicon|avatar|banner|discord|cursor|thumbs|\/resize\//i.test(url));
+}
+
+function parseAdultSeriesMatches({ html, title, provider, baseUrl, pattern, pathPattern }) {
+  const results = [];
+  const seen = new Set();
+  let match;
+  while ((match = pattern.exec(html))) {
+    const path = normalizeAdultPath(match[1], baseUrl, pathPattern);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    const nearby = html.slice(Math.max(0, match.index - 800), Math.min(html.length, match.index + 1400));
+    const name = cleanHtml(match[2] || firstMatch(nearby, /<h3[^>]*>[\s\S]*?<a\b[^>]*>([\s\S]*?)<\/a>/i) || match[3]);
+    const score = titleScore(title, name);
+    if (!name || score < 0.15) continue;
+    const cover = firstMatch(nearby, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
+    results.push(adultSourceResult({ provider, path, title: name, cover: absolutizeUrl(cover, baseUrl), score }));
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function directAdultSeriesMatch({ provider, title, baseUrl, path }) {
+  if (!path || /\/\//.test(path)) return null;
+  let html = "";
+  try {
+    html = await fetchTextCached(`${baseUrl}${path}`, { headers: { Referer: baseUrl } });
+  } catch (error) {
+    return null;
+  }
+  if (!html || /<h1>\s*404 Not Found\s*<\/h1>/i.test(html)) return null;
+  const rawTitle = cleanHtml(firstMatch(html, /<meta\b[^>]*(?:property|name)="og:title"[^>]*content="([^"]+)"/i) || firstMatch(html, /<title[^>]*>([\s\S]*?)<\/title>/i));
+  const name = titleScore(title, rawTitle) >= 0.6 ? rawTitle : title;
+  const cover = firstMatch(html, /<meta\b[^>]*(?:property|name)="og:image"[^>]*content="([^"]+)"/i) || firstMatch(html, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
+  return adultSourceResult({ provider, path, title: name, cover: absolutizeUrl(cover, baseUrl), score: Math.max(0.95, titleScore(title, name)) });
+}
+
+function adultChapterLinksFromHtml(html, provider, baseUrl, pattern) {
+  const chapters = [];
+  const seen = new Set();
+  let match;
+  while ((match = pattern.exec(html))) {
+    const path = normalizeAdultPath(decodeXml(match[1]), baseUrl, /^\//i);
+    if (!path || seen.has(path) || path.includes("{{")) continue;
+    seen.add(path);
+    const block = html.slice(Math.max(0, match.index - 300), Math.min(html.length, match.index + 700));
+    const title = cleanHtml(match[2] || firstMatch(block, /title="([^"]+)"/i));
+    const number = firstMatch(`${title} ${path}`, /chapter[-\s]*([\d.]+)/i) || firstMatch(`${title} ${path}`, /ch\.\s*([\d.]+)/i) || String(chapters.length + 1);
+    const date = cleanHtml(firstMatch(block, /<span[^>]*class="[^"]*(?:date|post-on|time)[^"]*"[^>]*>([\s\S]*?)<\/span>/i)) || "Date TBA";
+    chapters.push({ id: `${provider}:${path}`, provider, number, title: title || `Chapter ${number}`, date, description: title || `Chapter ${number}`, pages: 1 });
+  }
+  return chapters.filter((chapter) => chapter.number !== "0").sort((a, b) => Number.parseFloat(a.number) - Number.parseFloat(b.number));
+}
+
+function adultSourceResult({ provider, path, title, cover, score }) {
+  return { id: `${provider}:${path}`, provider, title, description: "Adult manga/manhwa source.", status: "unknown", year: "", cover, chapterCount: 0, score };
+}
+
+function mergeAdultResults(preferred, results) {
+  const byId = new Map();
+  [...preferred, ...results].forEach((result) => {
+    if (!result?.id) return;
+    const current = byId.get(result.id);
+    if (current && current.score >= result.score) return;
+    byId.set(result.id, result);
+  });
+  return [...byId.values()].sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+function normalizeAdultPath(value, baseUrl, pattern) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(decodeXml(raw), baseUrl);
+    const path = url.pathname.replace(/\/+$/, "") + (url.pathname.endsWith("/") ? "/" : "");
+    return pattern.test(path) ? path : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function slugifyTitle(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function adultMangaProviderFromId(value) {
+  const provider = String(value || "").split(":")[0];
+  return ["pornhwaz", "hentai20", "pornhwapro", "hentai18"].includes(provider) ? provider : "";
+}
+
 function cleanHtml(value) {
   return decodeXml(String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
 }
@@ -1922,7 +2162,7 @@ function pathSegment(value) {
 }
 
 function providerSet(value) {
-  const allowed = new Set(["mangadex", "asura", "mangakatana", "weebcentral", "flamecomics", "rizzcomic", "toonily"]);
+  const allowed = new Set(["mangadex", "asura", "mangakatana", "weebcentral", "flamecomics", "rizzcomic", "toonily", "pornhwaz", "hentai20", "pornhwapro", "hentai18"]);
   const selected = String(value || "").split(",").map((item) => item.trim().toLowerCase()).filter((item) => allowed.has(item));
   return new Set(selected.length ? selected : allowed);
 }
