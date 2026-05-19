@@ -1905,7 +1905,8 @@ async function getAdultMangaChapters(provider, id) {
   if (provider === "hentai20") return getAdultChapters(id, HENTAI20_BASE_URL, "hentai20", /^\/manga\/[^/?#]+\/?$/i, /href="(https:\/\/hentai20\.io\/[^"#?{}]+chapter-[^"#?{}]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
   if (provider === "pornhwapro") return getAdultChapters(id, PORNHWAPRO_BASE_URL, "pornhwapro", /^\/manhwa\/[^/?#]+\/?$/i, /href="(\/manhwa\/[^"#?]+\/chapter-[^"#?]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
   if (provider === "hentai18") return getHentai18Chapters(id);
-  if (provider === "hentainame" || provider === "hentaizap" || provider === "hentaifox" || provider === "3hentai" || provider === "hentaiera" || provider === "hentaicity") return getAdultGalleryChapters(provider, id);
+  if (provider === "3hentai") return get3HentaiChapters(id);
+  if (provider === "hentainame" || provider === "hentaizap" || provider === "hentaifox" || provider === "hentaiera" || provider === "hentaicity") return getAdultGalleryChapters(provider, id);
   return [];
 }
 
@@ -1914,7 +1915,8 @@ async function getAdultMangaPages(provider, id) {
   if (provider === "hentai20") return getAdultPages(id, HENTAI20_BASE_URL, /https:\/\/img\.hentai1\.io\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
   if (provider === "pornhwapro") return getAdultPages(id, PORNHWAPRO_BASE_URL, /https:\/\/[^"'<>\s]*manhwature\.com\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
   if (provider === "hentai18") return getAdultPages(id, HENTAI18_BASE_URL, /https:\/\/cdn\.hentai18\.net\/images\/manga\/[^"'<>\s]+?\.(?:webp|jpg|jpeg|png)(?:\?[^"'<>\s]*)?/gi);
-  if (provider === "hentainame" || provider === "hentaizap" || provider === "hentaifox" || provider === "3hentai" || provider === "hentaiera" || provider === "hentaicity") return getAdultGalleryPages(provider, id);
+  if (provider === "3hentai") return get3HentaiPages(id);
+  if (provider === "hentainame" || provider === "hentaizap" || provider === "hentaifox" || provider === "hentaiera" || provider === "hentaicity") return getAdultGalleryPages(provider, id);
   return [];
 }
 
@@ -1956,12 +1958,25 @@ async function getAdultGalleryChapters(provider, id) {
   return [{ id: `${provider}:${path}`, provider, number: "1", title, date: "Date TBA", description: title, pages }];
 }
 
+async function get3HentaiChapters(id) {
+  const { path } = parse3HentaiId(id);
+  if (!path) return [];
+  return [{ id: `3hentai:${id}`, provider: "3hentai", number: "1", title: "Gallery", date: "Date TBA", description: "Gallery", pages: 1 }];
+}
+
 async function getAdultGalleryPages(provider, id) {
   const baseUrl = adultGalleryBaseUrl(provider);
   const path = normalizeAdultPath(id, baseUrl, adultGalleryPathPattern(provider));
   if (!path) return [];
   const html = await fetchTextCached(`${baseUrl}${path}`, { headers: provider === "hentainame" ? simpleUserAgentHeaders({ Referer: baseUrl }) : { Referer: baseUrl } });
   return adultGalleryPageImages(provider, html, baseUrl, path);
+}
+
+async function get3HentaiPages(id) {
+  const { path, imageBase } = parse3HentaiId(id);
+  if (imageBase) return probeSequentialImages(imageBase, "jpg");
+  const html = await fetchTextCached(`${THREEHENTAI_BASE_URL}${path}`, { headers: { Referer: THREEHENTAI_BASE_URL } });
+  return adultGalleryPageImages("3hentai", html, THREEHENTAI_BASE_URL, path);
 }
 
 async function getAdultPages(id, baseUrl, imagePattern) {
@@ -2017,14 +2032,45 @@ function parse3HentaiSearch(html, title) {
   while ((match = pattern.exec(html))) {
     const block = match[0];
     const path = normalizeAdultPath(match[1], THREEHENTAI_BASE_URL, /^\/d\/\d+$/i);
-    if (!path || seen.has(path)) continue;
+    const cover = firstMatch(block, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
+    const imageBase = firstMatch(cover, /(https:\/\/s\d+\.3hentai\.net\/d\d+)\//i);
+    const idPath = imageBase ? `${path}|${imageBase}` : path;
+    if (!path || seen.has(idPath)) continue;
     const name = cleanHtml(firstMatch(block, /<div\b[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/i) || firstMatch(block, /alt="([^"]+)"/i));
     if (!name || !isEnglishAdultGalleryBlock("3hentai", block, name)) continue;
-    seen.add(path);
-    const cover = firstMatch(block, /(?:data-src|src)="([^"]+\.(?:webp|jpg|jpeg|png)[^"]*)"/i);
-    results.push(adultSourceResult({ provider: "3hentai", path, title: name, cover: absolutizeUrl(cover, THREEHENTAI_BASE_URL), score: Math.max(0.2, titleScore(title, name)) }));
+    seen.add(idPath);
+    results.push(adultSourceResult({ provider: "3hentai", path: idPath, title: name, cover: absolutizeUrl(cover, THREEHENTAI_BASE_URL), score: Math.max(0.2, titleScore(title, name)) }));
   }
   return results.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+function parse3HentaiId(id) {
+  const [rawPath, rawImageBase] = String(id || "").split("|");
+  const path = normalizeAdultPath(rawPath, THREEHENTAI_BASE_URL, /^\/d\/\d+$/i);
+  const imageBase = /^https:\/\/s\d+\.3hentai\.net\/d\d+$/i.test(rawImageBase || "") ? rawImageBase : "";
+  return { path, imageBase };
+}
+
+async function probeSequentialImages(imageBase, extension) {
+  const pages = [];
+  for (let start = 1; start <= 300; start += 20) {
+    const batch = await Promise.all([...Array(20)].map((_, index) => imageExists(`${imageBase}/${start + index}.${extension}`)));
+    for (let index = 0; index < batch.length; index += 1) {
+      const url = `${imageBase}/${start + index}.${extension}`;
+      if (!batch[index]) return pages;
+      pages.push(url);
+    }
+  }
+  return pages;
+}
+
+async function imageExists(url) {
+  try {
+    const response = await fetch(url, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0 AniTrack/1.0" } });
+    return response.ok && /^image\//i.test(response.headers.get("content-type") || "");
+  } catch (error) {
+    return false;
+  }
 }
 
 function parseHentaiEraSearch(html, title) {
