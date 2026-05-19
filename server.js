@@ -1827,7 +1827,7 @@ async function searchHentai18(title) {
 }
 
 async function getAdultMangaChapters(provider, id) {
-  if (provider === "pornhwaz") return getAdultChapters(id, PORNHWAZ_BASE_URL, "pornhwaz", /^\/webtoon\/[^/?#]+\/?$/i, /href="(https?:\/\/[^"#?]+\/[^"#?]+\/chapter-[^"#?]+\/?|\/[^"#?]+\/chapter-[^"#?]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
+  if (provider === "pornhwaz") return getPornhwaZChapters(id);
   if (provider === "hentai20") return getAdultChapters(id, HENTAI20_BASE_URL, "hentai20", /^\/manga\/[^/?#]+\/?$/i, /href="(https:\/\/hentai20\.io\/[^"#?{}]+chapter-[^"#?{}]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
   if (provider === "pornhwapro") return getAdultChapters(id, PORNHWAPRO_BASE_URL, "pornhwapro", /^\/manhwa\/[^/?#]+\/?$/i, /href="(\/manhwa\/[^"#?]+\/chapter-[^"#?]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
   if (provider === "hentai18") return getHentai18Chapters(id);
@@ -1847,6 +1847,13 @@ async function getAdultChapters(id, baseUrl, provider, seriesPattern, chapterPat
   if (!path) return [];
   const html = await fetchTextCached(`${baseUrl}${path}`, { headers: { Referer: baseUrl } });
   return adultChapterLinksFromHtml(html, provider, baseUrl, chapterPattern);
+}
+
+async function getPornhwaZChapters(id) {
+  const path = normalizeAdultPath(id, PORNHWAZ_BASE_URL, /^\/webtoon\/[^/?#]+\/?$/i);
+  if (!path) return [];
+  const html = await fetchTextCached(`${PORNHWAZ_BASE_URL}${path}ajax/chapters/?t=1`, { method: "POST", headers: { Referer: `${PORNHWAZ_BASE_URL}${path}`, "X-Requested-With": "XMLHttpRequest" } });
+  return adultChapterLinksFromHtml(html, "pornhwaz", PORNHWAZ_BASE_URL, /href="(https?:\/\/[^"#?]+\/[^"#?]+\/chapter-[^"#?]+\/?|\/[^"#?]+\/chapter-[^"#?]+\/)"[^>]*>([\s\S]*?)<\/a>/gi);
 }
 
 async function getHentai18Chapters(id) {
@@ -2106,6 +2113,7 @@ async function fetchTextCached(url, options = {}) {
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
+      method: options.method || "GET",
       signal: controller.signal,
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 AniTrack/1.0",
