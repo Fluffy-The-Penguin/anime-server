@@ -60,7 +60,12 @@ app.use(cors({
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, service: "anitrack-backend" });
+  res.json({ ok: true, service: "anitrack-backend", features: { maze: true } });
+});
+
+app.get("/api/maze/health", (req, res) => {
+  cleanupMazeRooms();
+  res.json({ ok: true, service: "maze-multiplayer", rooms: mazeRooms.size });
 });
 
 app.post("/api/account/register", async (req, res, next) => {
