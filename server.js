@@ -2232,7 +2232,12 @@ async function adultGalleryPageImages(provider, html, baseUrl = "", path = "") {
   if (provider === "hentaifox") {
     const galleryId = firstMatch(path, /\/gallery\/(\d+)\/?/i);
     const pageCount = Number(firstMatch(html, /id="load_pages"\s+value="(\d+)"/i) || firstMatch(html, /Pages:\s*(\d+)/i));
-    if (galleryId && pageCount > 10) return hentaifoxReaderImages(baseUrl, galleryId, pageCount);
+    if (galleryId && pageCount > 10) {
+      const imageBase = adultGalleryThumbnailBase(html, /https:\/\/i\d*\.hentaifox\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi);
+      const pages = await numberedAdultCdnImages(imageBase, pageCount, ["webp", "jpg", "png", "jpeg"]);
+      if (pages.length >= pageCount) return pages;
+      return hentaifoxReaderImages(baseUrl, galleryId, pageCount);
+    }
     const extension = await hentaifoxImageExtension(baseUrl, path);
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/i\d*\.hentaifox\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, `$1.${extension}`)));
   }
@@ -2242,7 +2247,12 @@ async function adultGalleryPageImages(provider, html, baseUrl = "", path = "") {
   if (provider === "hentaiera") {
     const galleryId = firstMatch(path, /\/gallery\/(\d+)\/?/i);
     const pageCount = Number(firstMatch(html, /id="load_pages"\s+value="(\d+)"/i) || firstMatch(html, /Pages:\s*(\d+)/i));
-    if (galleryId && pageCount > 12) return hentaieraReaderImages(baseUrl, galleryId, pageCount);
+    if (galleryId && pageCount > 12) {
+      const imageBase = adultGalleryThumbnailBase(html, /https:\/\/m\d+\.hentaiera\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi);
+      const pages = await numberedAdultCdnImages(imageBase, pageCount, ["webp", "jpg", "png", "jpeg"]);
+      if (pages.length >= pageCount) return pages;
+      return hentaieraReaderImages(baseUrl, galleryId, pageCount);
+    }
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/m\d+\.hentaiera\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.webp")));
   }
   if (provider === "hentaicity") {
@@ -2255,6 +2265,30 @@ async function hentaizapFullImage(thumbUrl) {
   const base = thumbUrl.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1");
   for (const extension of ["webp", "jpg", "png"]) {
     const url = `${base}.${extension}`;
+    if (await imageExists(url)) return url;
+  }
+  return "";
+}
+
+function adultGalleryThumbnailBase(html, pattern) {
+  const thumb = uniqueMatches(html, pattern)[0] || "";
+  return thumb.replace(/\/\d+t\.jpg(?:\?[^?]*)?$/i, "");
+}
+
+async function numberedAdultCdnImages(imageBase, pageCount, extensions) {
+  if (!imageBase) return [];
+  const pages = [];
+  const total = Math.min(300, Math.max(1, Number(pageCount || 0)));
+  for (let start = 1; start <= total; start += 24) {
+    const batch = await Promise.all([...Array(Math.min(24, total - start + 1))].map((_, index) => numberedAdultCdnImage(imageBase, start + index, extensions)));
+    pages.push(...batch.filter(Boolean));
+  }
+  return sortAdultPageImages(pages);
+}
+
+async function numberedAdultCdnImage(imageBase, pageNumber, extensions) {
+  for (const extension of extensions) {
+    const url = `${imageBase}/${pageNumber}.${extension}`;
     if (await imageExists(url)) return url;
   }
   return "";
