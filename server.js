@@ -11,6 +11,7 @@ const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 20000);
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 10 * 60 * 1000);
 const ACCOUNT_DATA_FILE = process.env.ACCOUNT_DATA_FILE || join(process.cwd(), "data", "users.json");
 const ACCOUNT_SECRET = process.env.ACCOUNT_SECRET || "anitrack-account-secret";
+const MAZE_ROOM_TTL_MS = Number(process.env.MAZE_ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 
 const ANIME_REPO_URL = "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json";
 const MANGA_REPO_URL = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json";
@@ -41,6 +42,7 @@ const ANIZONE_BASE_URL = "https://anizone.to";
 
 const app = express();
 const cache = new Map();
+const mazeRooms = new Map();
 
 const allowedOrigins = [
   ...CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean),
@@ -66,6 +68,59 @@ app.get("/health", (req, res) => {
 app.get("/api/maze/health", (req, res) => {
   cleanupMazeRooms();
   res.json({ ok: true, service: "maze-multiplayer", rooms: mazeRooms.size });
+});
+
+app.post("/api/maze/rooms", (req, res) => {
+  cleanupMazeRooms();
+  const size = parseMazeSize(req.body?.size);
+  const room = createMazeRoom(size);
+  const player = addMazePlayer(room, req.body?.name);
+  mazeRooms.set(room.code, room);
+  res.json({ room: serializeMazeRoom(room), playerId: player.id });
+});
+
+app.post("/api/maze/rooms/:code/join", (req, res) => {
+  cleanupMazeRooms();
+  const room = mazeRooms.get(normalizeMazeRoomCode(req.params.code));
+  if (!room) {
+    res.status(404).json({ error: "Maze room not found" });
+    return;
+  }
+  if (room.players.length >= 4) {
+    res.status(409).json({ error: "Maze room is full" });
+    return;
+  }
+  const player = addMazePlayer(room, req.body?.name);
+  room.updatedAt = Date.now();
+  res.json({ room: serializeMazeRoom(room), playerId: player.id });
+});
+
+app.get("/api/maze/rooms/:code", (req, res) => {
+  cleanupMazeRooms();
+  const room = mazeRooms.get(normalizeMazeRoomCode(req.params.code));
+  if (!room) {
+    res.status(404).json({ error: "Maze room not found" });
+    return;
+  }
+  room.updatedAt = Date.now();
+  res.json({ room: serializeMazeRoom(room) });
+});
+
+app.post("/api/maze/rooms/:code/move", (req, res) => {
+  cleanupMazeRooms();
+  const room = mazeRooms.get(normalizeMazeRoomCode(req.params.code));
+  if (!room) {
+    res.status(404).json({ error: "Maze room not found" });
+    return;
+  }
+  const player = room.players.find((item) => item.id === String(req.body?.playerId || ""));
+  if (!player) {
+    res.status(404).json({ error: "Maze player not found" });
+    return;
+  }
+  moveMazePlayer(room, player, req.body?.direction);
+  room.updatedAt = Date.now();
+  res.json({ room: serializeMazeRoom(room) });
 });
 
 app.post("/api/account/register", async (req, res, next) => {
