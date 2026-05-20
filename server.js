@@ -2723,6 +2723,118 @@ function asArray(value) {
   return Array.isArray(value) ? value : [value];
 }
 
+function cleanupMazeRooms() {
+  const now = Date.now();
+  for (const [code, room] of mazeRooms.entries()) {
+    if (now - Number(room.updatedAt || room.createdAt || 0) > MAZE_ROOM_TTL_MS) mazeRooms.delete(code);
+  }
+}
+
+function createMazeRoom(size) {
+  return {
+    code: createMazeRoomCode(),
+    size,
+    grid: createMazeGrid(size),
+    players: [],
+    goal: { r: size - 1, c: size - 1 },
+    winner: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+function createMazeRoomCode() {
+  let code = "";
+  do {
+    code = randomBytes(3).toString("hex").toUpperCase();
+  } while (mazeRooms.has(code));
+  return code;
+}
+
+function addMazePlayer(room, name) {
+  const colors = ["#ffffff", "#48dbfb", "#ff9ff3", "#feca57"];
+  const player = {
+    id: randomBytes(8).toString("hex"),
+    name: String(name || `P${room.players.length + 1}`).trim().slice(0, 20) || `P${room.players.length + 1}`,
+    color: colors[room.players.length % colors.length],
+    r: 0,
+    c: 0,
+  };
+  room.players.push(player);
+  return player;
+}
+
+function createMazeGrid(size) {
+  const grid = [];
+  const walls = [];
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) grid.push({ r, c, walls: [true, true, true, true], inMaze: false });
+  }
+
+  const start = grid[0];
+  start.inMaze = true;
+  addMazeWalls(start, walls, size);
+
+  while (walls.length) {
+    const wall = walls.splice(Math.floor(Math.random() * walls.length), 1)[0];
+    const cell2 = grid[wall.r2 * size + wall.c2];
+    if (cell2.inMaze) continue;
+    cell2.inMaze = true;
+    const cell1 = grid[wall.r1 * size + wall.c1];
+    cell1.walls[wall.dir] = false;
+    cell2.walls[(wall.dir + 2) % 4] = false;
+    addMazeWalls(cell2, walls, size);
+  }
+
+  return grid.map(({ r, c, walls }) => ({ r, c, walls }));
+}
+
+function addMazeWalls(cell, walls, size) {
+  const dr = [-1, 0, 1, 0];
+  const dc = [0, 1, 0, -1];
+  for (let dir = 0; dir < 4; dir++) {
+    const nr = cell.r + dr[dir];
+    const nc = cell.c + dc[dir];
+    if (nr >= 0 && nr < size && nc >= 0 && nc < size) walls.push({ r1: cell.r, c1: cell.c, r2: nr, c2: nc, dir });
+  }
+}
+
+function moveMazePlayer(room, player, value) {
+  const direction = String(value || "").toLowerCase();
+  const dirIndex = { up: 0, right: 1, down: 2, left: 3 }[direction];
+  if (!Number.isInteger(dirIndex)) return;
+  const cell = room.grid[player.r * room.size + player.c];
+  if (!cell || cell.walls[dirIndex]) return;
+  if (direction === "up") player.r -= 1;
+  if (direction === "right") player.c += 1;
+  if (direction === "down") player.r += 1;
+  if (direction === "left") player.c -= 1;
+  if (player.r === room.goal.r && player.c === room.goal.c && !room.winner) {
+    room.winner = { id: player.id, name: player.name, at: Date.now() };
+  }
+}
+
+function serializeMazeRoom(room) {
+  return {
+    code: room.code,
+    size: room.size,
+    grid: room.grid,
+    players: room.players,
+    goal: room.goal,
+    winner: room.winner,
+    updatedAt: room.updatedAt,
+  };
+}
+
+function parseMazeSize(value) {
+  const size = Number(value || 25);
+  return Math.min(60, Math.max(5, Number.isFinite(size) ? Math.floor(size) : 25));
+}
+
+function normalizeMazeRoomCode(value) {
+  return String(value || "").trim().toUpperCase().replace(/[^A-F0-9]/g, "").slice(0, 6);
+}
+
 function cleanQuery(value) {
   return String(value || "").trim().slice(0, 160);
 }
