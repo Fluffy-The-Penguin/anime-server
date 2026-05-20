@@ -1,11 +1,16 @@
 import cors from "cors";
 import express from "express";
+import { pbkdf2Sync, randomBytes, timingSafeEqual, createHmac } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 
 const PORT = Number(process.env.PORT || process.env.SERVER_PORT || process.env.P_SERVER_PORT || process.env.APP_PORT || 3000);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 20000);
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 10 * 60 * 1000);
+const ACCOUNT_DATA_FILE = process.env.ACCOUNT_DATA_FILE || join(process.cwd(), "data", "users.json");
+const ACCOUNT_SECRET = process.env.ACCOUNT_SECRET || "anitrack-account-secret";
 
 const ANIME_REPO_URL = "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json";
 const MANGA_REPO_URL = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json";
@@ -52,6 +57,72 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (req, res) => {
   res.json({ ok: true, service: "anitrack-backend" });
+});
+
+app.post("/api/account/register", async (req, res, next) => {
+  try {
+    const username = normalizeUsername(req.body?.username);
+    const password = String(req.body?.password || "");
+    if (!username || password.length < 6) {
+      res.status(400).json({ error: "Username and password with at least 6 characters are required" });
+      return;
+    }
+
+    const users = loadUsers();
+    if (users[username]) {
+      res.status(409).json({ error: "Username already exists" });
+      return;
+    }
+
+    users[username] = {
+      username,
+      password: hashPassword(password),
+      data: sanitizeAccountData(req.body?.data),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    saveUsers(users);
+    res.json(accountResponse(users[username]));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/account/login", async (req, res, next) => {
+  try {
+    const username = normalizeUsername(req.body?.username);
+    const password = String(req.body?.password || "");
+    const users = loadUsers();
+    const user = username ? users[username] : null;
+    if (!user || !verifyPassword(password, user.password)) {
+      res.status(401).json({ error: "Invalid username or password" });
+      return;
+    }
+    res.json(accountResponse(user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/account/sync", async (req, res, next) => {
+  try {
+    const user = requireAccount(req);
+    res.json({ username: user.username, data: user.data || {}, updatedAt: user.updatedAt || 0 });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/account/sync", async (req, res, next) => {
+  try {
+    const { users, username } = requireAccount(req, true);
+    users[username].data = sanitizeAccountData(req.body?.data);
+    users[username].updatedAt = Date.now();
+    saveUsers(users);
+    res.json({ ok: true, username, updatedAt: users[username].updatedAt });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/anilist", async (req, res, next) => {
@@ -2169,6 +2240,9 @@ async function adultGalleryPageImages(provider, html, baseUrl = "", path = "") {
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/s\d+\.3hentai\.(?:net|xyz)\/d\d+\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.jpg")));
   }
   if (provider === "hentaiera") {
+    const galleryId = firstMatch(path, /\/gallery\/(\d+)\/?/i);
+    const pageCount = Number(firstMatch(html, /id="load_pages"\s+value="(\d+)"/i) || firstMatch(html, /Pages:\s*(\d+)/i));
+    if (galleryId && pageCount > 12) return hentaieraReaderImages(baseUrl, galleryId, pageCount);
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/m\d+\.hentaiera\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.webp")));
   }
   if (provider === "hentaicity") {
@@ -2214,6 +2288,100 @@ async function hentaifoxReaderImage(baseUrl, galleryId, pageNumber) {
   } catch (error) {
     return "";
   }
+}
+
+async function hentaieraReaderImages(baseUrl, galleryId, pageCount) {
+  const pages = [];
+  const total = Math.min(300, Math.max(1, Number(pageCount || 0)));
+  for (let start = 1; start <= total; start += 12) {
+    const batch = await Promise.all([...Array(Math.min(12, total - start + 1))].map((_, index) => hentaieraReaderImage(baseUrl, galleryId, start + index)));
+    pages.push(...batch.filter(Boolean));
+  }
+  return sortAdultPageImages(pages);
+}
+
+async function hentaieraReaderImage(baseUrl, galleryId, pageNumber) {
+  try {
+    const html = await fetchTextCached(`${baseUrl}/view/${galleryId}/${pageNumber}/`, { headers: { Referer: baseUrl } });
+    return html.match(new RegExp(`https://m\\d+\\.hentaiera\\.com/[^"'<>\\s]+?/${pageNumber}\\.(?:webp|jpg|jpeg|png)`, "i"))?.[0] || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function normalizeUsername(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+}
+
+function loadUsers() {
+  try {
+    return JSON.parse(readFileSync(ACCOUNT_DATA_FILE, "utf8")) || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveUsers(users) {
+  mkdirSync(dirname(ACCOUNT_DATA_FILE), { recursive: true });
+  writeFileSync(ACCOUNT_DATA_FILE, JSON.stringify(users, null, 2));
+}
+
+function hashPassword(password) {
+  const salt = randomBytes(16).toString("base64url");
+  const hash = pbkdf2Sync(password, salt, 120000, 32, "sha256").toString("base64url");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hash] = String(stored || "").split(":");
+  if (!salt || !hash) return false;
+  const candidate = pbkdf2Sync(password, salt, 120000, 32, "sha256").toString("base64url");
+  const left = Buffer.from(candidate);
+  const right = Buffer.from(hash);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function accountResponse(user) {
+  return { username: user.username, token: accountToken(user.username), data: user.data || {}, updatedAt: user.updatedAt || 0 };
+}
+
+function accountToken(username) {
+  const expires = Date.now() + 1000 * 60 * 60 * 24 * 90;
+  const payload = `${username}.${expires}`;
+  const signature = createHmac("sha256", ACCOUNT_SECRET).update(payload).digest("base64url");
+  return Buffer.from(`${payload}.${signature}`).toString("base64url");
+}
+
+function requireAccount(req, includeUsers = false) {
+  const header = String(req.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const decoded = token ? Buffer.from(token, "base64url").toString("utf8") : "";
+  const [username, expires, signature] = decoded.split(".");
+  const payload = `${username}.${expires}`;
+  const expected = createHmac("sha256", ACCOUNT_SECRET).update(payload).digest("base64url");
+  if (!username || Number(expires) < Date.now() || signature !== expected) {
+    const error = new Error("Unauthorized");
+    error.status = 401;
+    throw error;
+  }
+  const users = loadUsers();
+  if (!users[username]) {
+    const error = new Error("Unauthorized");
+    error.status = 401;
+    throw error;
+  }
+  return includeUsers ? { users, username } : users[username];
+}
+
+function sanitizeAccountData(data) {
+  const input = data && typeof data === "object" ? data : {};
+  return {
+    library: input.library && typeof input.library === "object" ? input.library : {},
+    settings: input.settings && typeof input.settings === "object" ? input.settings : {},
+    theme: String(input.theme || "").slice(0, 20),
+    readerMode: String(input.readerMode || "").slice(0, 40),
+    updatedAt: Number(input.updatedAt || Date.now()),
+  };
 }
 
 function sortAdultPageImages(urls) {
