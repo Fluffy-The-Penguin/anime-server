@@ -2234,8 +2234,7 @@ async function adultGalleryPageImages(provider, html, baseUrl = "", path = "") {
     const pageCount = Number(firstMatch(html, /id="load_pages"\s+value="(\d+)"/i) || firstMatch(html, /Pages:\s*(\d+)/i));
     if (galleryId && pageCount > 10) {
       const imageBase = adultGalleryThumbnailBase(html, /https:\/\/i\d*\.hentaifox\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi);
-      const extension = await hentaifoxImageExtension(baseUrl, path);
-      if (imageBase) return generatedAdultNumberedImages(imageBase, pageCount, extension);
+      if (imageBase) return generatedAdultNumberedImages(imageBase, pageCount, "webp");
       return hentaifoxReaderImages(baseUrl, galleryId, Math.min(pageCount, 12));
     }
     const extension = await hentaifoxImageExtension(baseUrl, path);
@@ -2249,8 +2248,7 @@ async function adultGalleryPageImages(provider, html, baseUrl = "", path = "") {
     const pageCount = Number(firstMatch(html, /id="load_pages"\s+value="(\d+)"/i) || firstMatch(html, /Pages:\s*(\d+)/i));
     if (galleryId && pageCount > 12) {
       const imageBase = adultGalleryThumbnailBase(html, /https:\/\/m\d+\.hentaiera\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi);
-      const extension = await hentaieraImageExtension(baseUrl, galleryId);
-      if (imageBase) return generatedAdultNumberedImages(imageBase, pageCount, extension);
+      if (imageBase) return generatedAdultNumberedImages(imageBase, pageCount, "webp");
       return hentaieraReaderImages(baseUrl, galleryId, Math.min(pageCount, 12));
     }
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/m\d+\.hentaiera\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, "$1.webp")));
