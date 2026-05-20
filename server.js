@@ -42,7 +42,11 @@ const ANIZONE_BASE_URL = "https://anizone.to";
 const app = express();
 const cache = new Map();
 
-const allowedOrigins = CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+const allowedOrigins = [
+  ...CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean),
+  "https://anime-fluffy.vercel.app",
+  "https://maze-multiplayer-chi.vercel.app",
+];
 
 app.use(cors({
   origin(origin, callback) {
