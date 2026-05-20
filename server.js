@@ -2159,6 +2159,9 @@ async function adultGalleryPageImages(provider, html, baseUrl = "", path = "") {
     return sortAdultPageImages(pages.filter(Boolean));
   }
   if (provider === "hentaifox") {
+    const galleryId = firstMatch(path, /\/gallery\/(\d+)\/?/i);
+    const pageCount = Number(firstMatch(html, /id="load_pages"\s+value="(\d+)"/i) || firstMatch(html, /Pages:\s*(\d+)/i));
+    if (galleryId && pageCount > 10) return hentaifoxReaderImages(baseUrl, galleryId, pageCount);
     const extension = await hentaifoxImageExtension(baseUrl, path);
     return sortAdultPageImages(uniqueMatches(html, /https:\/\/i\d*\.hentaifox\.com\/[^"'<>\s]+?\/\d+t\.jpg/gi).map((url) => url.replace(/(\d+)t\.jpg(?:\?[^?]*)?$/i, `$1.${extension}`)));
   }
@@ -2191,6 +2194,25 @@ async function hentaifoxImageExtension(baseUrl, galleryPath) {
     return firstMatch(html, /https:\/\/i\d*\.hentaifox\.com\/[^"'<>\s]+?\/1\.(webp|jpg|jpeg|png)/i) || "jpg";
   } catch (error) {
     return "jpg";
+  }
+}
+
+async function hentaifoxReaderImages(baseUrl, galleryId, pageCount) {
+  const pages = [];
+  const total = Math.min(300, Math.max(1, Number(pageCount || 0)));
+  for (let start = 1; start <= total; start += 12) {
+    const batch = await Promise.all([...Array(Math.min(12, total - start + 1))].map((_, index) => hentaifoxReaderImage(baseUrl, galleryId, start + index)));
+    pages.push(...batch.filter(Boolean));
+  }
+  return sortAdultPageImages(pages);
+}
+
+async function hentaifoxReaderImage(baseUrl, galleryId, pageNumber) {
+  try {
+    const html = await fetchTextCached(`${baseUrl}/g/${galleryId}/${pageNumber}/`, { headers: { Referer: baseUrl } });
+    return html.match(new RegExp(`https://i\\d*\\.hentaifox\\.com/[^"'<>\\s]+?/${pageNumber}\\.(?:webp|jpg|jpeg|png)`, "i"))?.[0] || "";
+  } catch (error) {
+    return "";
   }
 }
 
