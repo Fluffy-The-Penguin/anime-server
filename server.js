@@ -11,6 +11,7 @@ const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 20000);
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 10 * 60 * 1000);
 const ACCOUNT_DATA_FILE = process.env.ACCOUNT_DATA_FILE || join(process.cwd(), "data", "users.json");
 const ACCOUNT_SECRET = process.env.ACCOUNT_SECRET || "anitrack-account-secret";
+const ACCOUNT_ACTIVITY_LIMIT = 500;
 const MAZE_ROOM_TTL_MS = Number(process.env.MAZE_ROOM_TTL_MS || 2 * 60 * 60 * 1000);
 
 const ANIME_REPO_URL = "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json";
@@ -2489,11 +2490,17 @@ function sanitizeAccountData(data) {
   const input = data && typeof data === "object" ? data : {};
   return {
     library: input.library && typeof input.library === "object" ? input.library : {},
+    activity: sanitizeAccountActivity(input.activity),
     settings: input.settings && typeof input.settings === "object" ? input.settings : {},
     theme: String(input.theme || "").slice(0, 20),
     readerMode: String(input.readerMode || "").slice(0, 40),
     updatedAt: Number(input.updatedAt || Date.now()),
   };
+}
+
+function sanitizeAccountActivity(activity) {
+  if (!Array.isArray(activity)) return [];
+  return activity.filter((item) => item && typeof item === "object").slice(0, ACCOUNT_ACTIVITY_LIMIT);
 }
 
 function sortAdultPageImages(urls) {
