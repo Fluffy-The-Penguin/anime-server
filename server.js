@@ -780,21 +780,47 @@ function animeDexEpisodeRow(episode, index) {
 async function getAnimeDexStreams(episodeId, subtitleContext = {}) {
   const data = await postJson(`${ANIMEDEX_BASE_URL}/api/stream/sources`, { action: "sources", episodeId });
   const tracks = await mergeExternalSubtitleTracks(normalizeTrackList(data.subtitles), subtitleContext);
+  const sources = await playableAnimeDexSources(data.sources, tracks);
   return {
     provider: "animedex",
-    sources: asArray(data.sources).filter((source) => source?.url && (source.isHLS || String(source.url).includes(".m3u8"))).map((source, index) => ({
-      name: `AnimeDex ${source.quality || index + 1}`,
-      quality: source.quality || "auto",
-      type: source.isHLS || String(source.url).includes(".m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4",
-      url: proxyAnimeDexUrl(source.url),
-      referer: source.referer || "",
-      isHLS: Boolean(source.isHLS || String(source.url).includes(".m3u8")),
-      tracks,
-    })),
+    sources,
     tracks,
     intro: data.intro || null,
     outro: data.outro || null,
   };
+}
+
+async function playableAnimeDexSources(sources, tracks) {
+  const rows = asArray(sources)
+    .filter((source) => source?.url && (source.isHLS || String(source.url).includes(".m3u8")))
+    .map((source, index) => ({
+      rawUrl: source.url,
+      name: `AnimeDex ${source.quality || index + 1}`,
+      quality: source.quality || "auto",
+      type: "application/vnd.apple.mpegurl",
+      url: proxyAnimeDexUrl(source.url),
+      referer: source.referer || "",
+      isHLS: true,
+      tracks,
+    }));
+  const checked = await Promise.all(rows.map(async (source) => (
+    await isPlayableAnimeDexManifest(source.rawUrl) ? source : null
+  )));
+  return checked.filter(Boolean).map(({ rawUrl, ...source }) => source);
+}
+
+async function isPlayableAnimeDexManifest(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: animeDexMediaHeaders({ headers: {} }) });
+    try { await response.body?.cancel?.(); } catch (error) {}
+    return response.ok && !String(response.headers.get("content-type") || "").includes("text/html");
+  } catch (error) {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function proxyAnimeDexMedia(req, res) {
