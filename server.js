@@ -42,6 +42,7 @@ const HSTREAM_BASE_URL = "https://hstream.moe";
 const ANIMEDEX_BASE_URL = "https://animedex.pp.ua";
 const ANIZONE_BASE_URL = "https://anizone.to";
 const JIMAKU_BASE_URL = "https://jimaku.cc";
+const ANIMEKAI_BASE_URL = "https://animekai.to";
 
 const app = express();
 const cache = new Map();
@@ -372,6 +373,24 @@ app.get("/api/anime/anizone/proxy", async (req, res, next) => {
   try {
     await proxyAniZoneMedia(req, res);
   } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/animekai/search", async (req, res, next) => {
+  try {
+    const title = cleanQuery(req.query.title);
+    if (!title) {
+      res.status(400).json({ error: "title is required" });
+      return;
+    }
+
+    res.json(await searchAnimeKai(title));
+  } catch (error) {
+    if (isProviderUnavailableError(error)) {
+      res.json([]);
+      return;
+    }
     next(error);
   }
 });
@@ -991,6 +1010,41 @@ function isAllowedAniZoneMediaUrl(url) {
   } catch (error) {
     return false;
   }
+}
+
+async function searchAnimeKai(title) {
+  const html = await fetchTextCached(`${ANIMEKAI_BASE_URL}/browser?keyword=${encodeURIComponent(title)}`, {
+    headers: { Accept: "text/html,*/*", Referer: `${ANIMEKAI_BASE_URL}/browser` },
+  });
+  const results = [];
+  const seen = new Set();
+  const linkRegex = /<a\b[^>]*href="(\/watch\/[^"]+)"[^>]*class="[^"]*\bposter\b[^"]*"[^>]*>/gi;
+  let match;
+  while ((match = linkRegex.exec(html)) && results.length < 12) {
+    const path = decodeXml(match[1]);
+    if (seen.has(path)) continue;
+    seen.add(path);
+
+    const block = html.slice(match.index, Math.min(html.length, match.index + 1600));
+    const titleText = cleanHtml(firstMatch(block, /<a\b[^>]*class="[^"]*\btitle\b[^"]*"[^>]*title="([^"]+)"/i) || firstMatch(block, /<a\b[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/a>/i));
+    if (!titleText) continue;
+    const image = firstMatch(block, /<img\b[^>]*(?:data-src|src)="([^"]+)"/i);
+    const meta = [...block.matchAll(/<span\b[^>]*>([\s\S]*?)<\/span>/gi)].map((item) => cleanHtml(item[1])).filter(Boolean);
+    const episodeCount = Number(firstMatch(meta.join(" "), /\b(\d+)\b/)) || 0;
+    const type = meta.slice().reverse().find((item) => /^[A-Z]{2,5}$/i.test(item)) || "Provider";
+    results.push({
+      provider: "animekai",
+      id: path.replace(/^\/watch\//, ""),
+      title: titleText,
+      url: absolutizeUrl(path, ANIMEKAI_BASE_URL),
+      image: absolutizeUrl(image, ANIMEKAI_BASE_URL),
+      type,
+      episodeCount,
+      date: episodeCount ? `${episodeCount} episodes` : "AnimeKai",
+      score: titleScore(title, titleText),
+    });
+  }
+  return results.filter((item) => item.score >= 0.2).sort((a, b) => b.score - a.score);
 }
 
 function normalizeTrackList(tracks) {
