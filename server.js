@@ -41,6 +41,7 @@ const ANIWAVES_BASE_URL = "https://aniwaves.ru";
 const HSTREAM_BASE_URL = "https://hstream.moe";
 const ANIMEDEX_BASE_URL = "https://animedex.pp.ua";
 const ANIZONE_BASE_URL = "https://anizone.to";
+const JIMAKU_BASE_URL = "https://jimaku.cc";
 
 const app = express();
 const cache = new Map();
@@ -299,7 +300,7 @@ app.get("/api/anime/animedex/streams", async (req, res, next) => {
       return;
     }
 
-    res.json(await getAnimeDexStreams(episodeId));
+    res.json(await getAnimeDexStreams(episodeId, subtitleContextFromRequest(req)));
   } catch (error) {
     next(error);
   }
@@ -353,7 +354,15 @@ app.get("/api/anime/anizone/streams", async (req, res, next) => {
       return;
     }
 
-    res.json(await getAniZoneStreams(episodeUrl));
+    res.json(await getAniZoneStreams(episodeUrl, subtitleContextFromRequest(req)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/anime/jimaku/proxy", async (req, res, next) => {
+  try {
+    await proxyJimakuSubtitle(req, res);
   } catch (error) {
     next(error);
   }
@@ -749,9 +758,9 @@ function animeDexEpisodeRow(episode, index) {
   };
 }
 
-async function getAnimeDexStreams(episodeId) {
+async function getAnimeDexStreams(episodeId, subtitleContext = {}) {
   const data = await postJson(`${ANIMEDEX_BASE_URL}/api/stream/sources`, { action: "sources", episodeId });
-  const tracks = normalizeTrackList(data.subtitles);
+  const tracks = await mergeExternalSubtitleTracks(normalizeTrackList(data.subtitles), subtitleContext);
   return {
     provider: "animedex",
     sources: asArray(data.sources).filter((source) => source?.url && (source.isHLS || String(source.url).includes(".m3u8"))).map((source, index) => ({
@@ -885,7 +894,7 @@ async function getAniZoneEpisodes(animeId) {
   return links.sort((a, b) => a.number - b.number);
 }
 
-async function getAniZoneStreams(episodeUrl) {
+async function getAniZoneStreams(episodeUrl, subtitleContext = {}) {
   const html = await fetchTextCached(episodeUrl, { headers: { Referer: ANIZONE_BASE_URL } });
   const streamUrl = firstMatch(html, /<media-player\b[^>]*\bsrc="([^"]+\.m3u8[^"]*)"/i);
   if (!streamUrl) {
@@ -893,12 +902,12 @@ async function getAniZoneStreams(episodeUrl) {
     error.status = 404;
     throw error;
   }
-  const tracks = [...html.matchAll(/<track\b[^>]*src=([^\s>]+)[^>]*label="([^"]+)"[^>]*srclang="([^"]+)"/gi)].map((match) => ({
+  const tracks = await mergeExternalSubtitleTracks([...html.matchAll(/<track\b[^>]*src=([^\s>]+)[^>]*label="([^"]+)"[^>]*srclang="([^"]+)"/gi)].map((match) => ({
     kind: "subtitles",
     label: cleanHtml(match[2]),
     srclang: match[3],
     url: proxyAniZoneUrl(decodeXml(match[1].replace(/^['"]|['"]$/g, ""))),
-  }));
+  })), subtitleContext);
   return {
     provider: "anizone",
     sources: [{
@@ -993,6 +1002,148 @@ function normalizeTrackList(tracks) {
   }));
 }
 
+function subtitleContextFromRequest(req) {
+  return {
+    anilistId: cleanQuery(req.query.anilistId || req.query.aniListId),
+    title: cleanQuery(req.query.title),
+    episode: cleanQuery(req.query.episode || req.query.episodeNumber),
+  };
+}
+
+async function mergeExternalSubtitleTracks(tracks, context = {}) {
+  const baseTracks = normalizeTrackList(tracks);
+  const externalTracks = await getJimakuSubtitleTracks(context).catch(() => []);
+  if (!externalTracks.length) return baseTracks;
+
+  const seen = new Set(baseTracks.map((track) => String(track.url || "")));
+  return [...baseTracks, ...externalTracks.filter((track) => {
+    const key = String(track.url || "");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  })];
+}
+
+async function getJimakuSubtitleTracks({ anilistId, title, episode } = {}) {
+  const entry = await findJimakuEntry({ anilistId, title });
+  if (!entry?.id) return [];
+
+  const html = await fetchTextCached(`${JIMAKU_BASE_URL}/entry/${entry.id}`);
+  const episodeNumber = Number.parseFloat(episode);
+  const files = [];
+  const linkRegex = /<a\b[^>]*href="(\/entry\/\d+\/download\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = linkRegex.exec(html))) {
+    const name = cleanHtml(match[2]);
+    if (!/\.(?:ass|ssa|srt|vtt)$/i.test(name)) continue;
+    const score = jimakuEpisodeScore(name, episodeNumber);
+    if (Number.isFinite(episodeNumber) && score <= 0) continue;
+    files.push({ name, score, url: absolutizeUrl(match[1], JIMAKU_BASE_URL) });
+  }
+
+  return files
+    .sort((a, b) => b.score - a.score || jimakuSubtitleRank(a.name) - jimakuSubtitleRank(b.name))
+    .slice(0, 6)
+    .map((file) => {
+      const language = jimakuSubtitleLanguage(file.name);
+      return {
+        kind: "subtitles",
+        label: `Jimaku ${language.label}`,
+        srclang: language.code,
+        url: proxyJimakuUrl(file.url),
+      };
+    });
+}
+
+async function findJimakuEntry({ anilistId, title } = {}) {
+  const id = Number.parseInt(anilistId, 10);
+  const queryTitle = cleanHtml(title);
+  if (!id && !queryTitle) return null;
+
+  const html = await fetchTextCached(`${JIMAKU_BASE_URL}/`);
+  const entryRegex = /<div\s+class="entry"\s+data-extra="([^"]+)"[\s\S]*?<a\s+href="\/entry\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  let best = null;
+  while ((match = entryRegex.exec(html))) {
+    const metadata = parseJimakuEntryMetadata(match[1]);
+    const entryId = match[2];
+    const entryTitle = cleanHtml(metadata.name || match[3]);
+    if (id && Number(metadata.anilist_id) === id) return { id: entryId, title: entryTitle };
+    if (!id && queryTitle) {
+      const score = Math.max(
+        titleScore(queryTitle, entryTitle),
+        titleScore(queryTitle, metadata.english_name || ""),
+        titleScore(queryTitle, metadata.japanese_name || ""),
+      );
+      if (score > (best?.score || 0)) best = { id: entryId, title: entryTitle, score };
+    }
+  }
+
+  return best?.score >= 0.86 ? best : null;
+}
+
+function parseJimakuEntryMetadata(value) {
+  try {
+    return JSON.parse(decodeXml(value));
+  } catch (error) {
+    return {};
+  }
+}
+
+function jimakuEpisodeScore(name, episodeNumber) {
+  if (!Number.isFinite(episodeNumber)) return 1;
+  const number = Math.trunc(episodeNumber);
+  const padded = String(number).padStart(2, "0");
+  const text = String(name || "");
+  if (new RegExp(`s\\d{1,2}e0*${number}(?!\\d)`, "i").test(text)) return 5;
+  if (new RegExp(`(?:^|[^a-z0-9])e(?:p(?:isode)?)?\\s*0*${number}(?!\\d)`, "i").test(text)) return 4;
+  if (new RegExp(`(?:^|[^\\d])${padded}(?:[^\\d]|$)`).test(text)) return 2;
+  if (new RegExp(`(?:^|[^\\d])${number}(?:[^\\d]|$)`).test(text)) return 1;
+  return 0;
+}
+
+function jimakuSubtitleRank(name) {
+  const text = String(name || "").toLowerCase();
+  if (text.endsWith(".ass") || text.endsWith(".ssa")) return 0;
+  if (text.endsWith(".srt")) return 1;
+  return 2;
+}
+
+function jimakuSubtitleLanguage(name) {
+  const text = String(name || "").toLowerCase();
+  if (/(?:^|[.\[\]() _-])(en|eng)(?:[.\[\]() _-]|$)/.test(text)) return { code: "en", label: "English" };
+  return { code: "ja", label: "Japanese" };
+}
+
+async function proxyJimakuSubtitle(req, res) {
+  const target = validateHttpUrl(req.query.url);
+  if (!target || !isAllowedJimakuUrl(target)) {
+    res.status(400).json({ error: "valid Jimaku subtitle url is required" });
+    return;
+  }
+
+  const text = await fetchTextCached(target, { headers: { Accept: "text/plain,*/*", Referer: `${JIMAKU_BASE_URL}/` } });
+
+  res.status(200);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Content-Type", contentTypeForUrl(target));
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.send(text);
+}
+
+function proxyJimakuUrl(url) {
+  return `/api/anime/jimaku/proxy?url=${encodeURIComponent(url)}`;
+}
+
+function isAllowedJimakuUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && parsed.hostname === "jimaku.cc" && /^\/entry\/\d+\/download\//.test(parsed.pathname);
+  } catch (error) {
+    return false;
+  }
+}
+
 function contentTypeForUrl(url) {
   const path = new URL(url).pathname.toLowerCase();
   if (path.endsWith(".m3u8")) return "application/vnd.apple.mpegurl";
@@ -1000,7 +1151,9 @@ function contentTypeForUrl(url) {
   if (path.endsWith(".m4s")) return "video/iso.segment";
   if (path.endsWith(".key")) return "application/octet-stream";
   if (path.endsWith(".vtt")) return "text/vtt";
+  if (path.endsWith(".srt")) return "application/x-subrip; charset=utf-8";
   if (path.endsWith(".ass")) return "text/plain";
+  if (path.endsWith(".ssa")) return "text/plain";
   return "application/octet-stream";
 }
 
