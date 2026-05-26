@@ -596,6 +596,16 @@ app.get("/api/manga/pages", async (req, res, next) => {
 });
 
 app.use((error, req, res, next) => {
+  if (isClientAbortError(error)) {
+    if (process.env.LOG_CLIENT_ABORTS === "1") {
+      console.warn(`Client aborted request body: ${req.method} ${req.originalUrl}`);
+    }
+    return;
+  }
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
   const isTimeout = error.name === "AbortError" || error.code === "UPSTREAM_TIMEOUT";
   const isUpstreamHttpError = Boolean(error.url && error.status && error.status >= 400);
   const status = isTimeout ? 504 : isUpstreamHttpError ? 502 : error.status || 500;
@@ -749,6 +759,10 @@ async function searchAnimeDex(title) {
 
 function isProviderUnavailableError(error) {
   return Boolean(error?.url && [403, 429, 500, 502, 503, 504].includes(Number(error.status)));
+}
+
+function isClientAbortError(error) {
+  return error?.type === "request.aborted" || error?.code === "ECONNABORTED";
 }
 
 async function getAnimeDexEpisodes({ animeId, anilistId }) {
@@ -1633,7 +1647,9 @@ async function searchWeebCentralManga(title) {
     const results = parseWeebCentralSearchResults(html, title);
     if (results.length) return results;
   } catch (error) {
-    console.warn(`WeebCentral search failed, trying sitemap fallback: ${error.status || error.message}`);
+    if (Number(error.status) !== 403) {
+      console.warn(`WeebCentral search failed, trying sitemap fallback: ${error.status || error.message}`);
+    }
   }
 
   try {
