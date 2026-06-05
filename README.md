@@ -14,12 +14,12 @@ The server reads `.env` from the working directory before startup.
 Health check:
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:21204/health
 ```
 
 ## Configuration
 
-- `PORT`: HTTP port. The server also reads `SERVER_PORT`, `P_SERVER_PORT`, and `APP_PORT`.
+- `PORT`: HTTP port. Defaults to `21204` for the hosted sync server. The server also reads `SERVER_PORT`, `P_SERVER_PORT`, `APP_PORT`, `BOT_PORT`, `PRIMARY_PORT`, `ALLOCATED_PORT`, `PTERODACTYL_PORT`, and `BOT_HOSTING_PORT`.
 - `CORS_ORIGIN`: Comma-separated allowed origins, or `*`.
 - `ACCOUNT_SECRET`: Secret used to sign account tokens. Set this in production. If missing, the server generates a temporary secret and all login tokens expire on restart.
 - `ACCOUNT_DATABASE_FILE`: SQLite database path. Defaults to `data/sync.sqlite`.
@@ -37,3 +37,13 @@ If an old `data/users.json` file exists and the SQLite database is empty, it is 
 - `PUT /api/account/sync`
 
 Authenticated sync endpoints require `Authorization: Bearer <token>` from login/register.
+
+## Bot-Hosting / Pterodactyl Notes
+
+The backend must listen on the same port the hosting panel exposes. For the current watchAny sync host, the exposed address is:
+
+```text
+fi10.bot-hosting.net:21204
+```
+
+If logs show `watchAny sync server running on port 3000`, the app is listening on the wrong internal port and `http://watchany-fluffy.duckdns.org:21204/health` will fail. Restart after pulling this version, or set `PORT=21204` in the hosting panel environment.

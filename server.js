@@ -7,7 +7,8 @@ import { dirname, join } from "node:path";
 
 loadEnvFile();
 
-const PORT = Number(process.env.PORT || process.env.SERVER_PORT || process.env.P_SERVER_PORT || process.env.APP_PORT || 3000);
+const DEFAULT_PORT = 21204;
+const PORT = resolvePort();
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 const ACCOUNT_DATABASE_FILE = process.env.ACCOUNT_DATABASE_FILE || process.env.SQLITE_FILE || join(process.cwd(), "data", "sync.sqlite");
 const LEGACY_ACCOUNT_DATA_FILE = process.env.ACCOUNT_DATA_FILE || join(process.cwd(), "data", "users.json");
@@ -121,6 +122,15 @@ app.listen(PORT, "0.0.0.0", () => {
 
 function normalizeUsername(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+}
+
+function resolvePort() {
+  const names = ["PORT", "SERVER_PORT", "P_SERVER_PORT", "APP_PORT", "BOT_PORT", "PRIMARY_PORT", "ALLOCATED_PORT", "PTERODACTYL_PORT", "BOT_HOSTING_PORT"];
+  for (const name of names) {
+    const port = Number(process.env[name]);
+    if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+  }
+  return DEFAULT_PORT;
 }
 
 function loadEnvFile() {
