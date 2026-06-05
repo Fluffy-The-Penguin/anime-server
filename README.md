@@ -1,6 +1,6 @@
-# AniTrack Backend
+# AniTrack Sync Backend
 
-Node API used by AniTrack for AniList fallback data, extension catalog metadata, manga pages, and native anime source lookups.
+Small Express API used only for AniTrack account login and cloud sync. It stores one opaque JSON sync document per user in SQLite, so the app can sync libraries, settings, extension setup, and backup state without this server knowing the app schema.
 
 ## Local Run
 
@@ -15,26 +15,23 @@ Health check:
 curl http://localhost:3000/health
 ```
 
-## Pterodactyl / Bot Hosting
+## Configuration
 
-- Upload the `backend` folder.
-- Run `npm install` once.
-- Startup command: `npm start`
-- Set `PORT` to the port assigned by the panel if your host does not provide it automatically. The server also reads `SERVER_PORT`, `P_SERVER_PORT`, and `APP_PORT`.
-- Set `CORS_ORIGIN` to your Vercel URL, for example `https://your-site.vercel.app`.
+- `PORT`: HTTP port. The server also reads `SERVER_PORT`, `P_SERVER_PORT`, and `APP_PORT`.
+- `CORS_ORIGIN`: Comma-separated allowed origins, or `*`.
+- `ACCOUNT_SECRET`: Secret used to sign account tokens. Set this in production.
+- `ACCOUNT_DATABASE_FILE`: SQLite database path. Defaults to `data/sync.sqlite`.
+- `ACCOUNT_JSON_LIMIT`: Maximum request body size. Defaults to `50mb`.
+- `ACCOUNT_TOKEN_TTL_MS`: Token lifetime. Defaults to 90 days.
+
+If an old `data/users.json` file exists and the SQLite database is empty, it is imported once on startup.
 
 ## Endpoints
 
 - `GET /health`
-- `POST /api/anilist`
-- `GET /api/extensions/anime?limit=50`
-- `GET /api/extensions/manga?limit=50`
-- `GET /api/manga/search?title=Berserk&providers=mangadex`
-- `GET /api/manga/chapters?mangaId=mangadex:...`
-- `GET /api/manga/pages?chapterId=mangadex:...`
-- `GET /api/anime/animedex/search?title=Bleach`
-- `GET /api/anime/animedex/episodes?animeId=...&anilistId=...`
-- `GET /api/anime/animedex/streams?episodeId=...`
-- `GET /api/anime/anizone/search?title=Bleach`
-- `GET /api/anime/anizone/episodes?animeId=...`
-- `GET /api/anime/anizone/streams?episodeUrl=...`
+- `POST /api/account/register`
+- `POST /api/account/login`
+- `GET /api/account/sync`
+- `PUT /api/account/sync`
+
+Authenticated sync endpoints require `Authorization: Bearer <token>` from login/register.
