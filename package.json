@@ -2,6 +2,9 @@
   "name": "watchany-sync-backend",
   "version": "1.0.0",
   "private": true,
+  "allowScripts": {
+    "better-sqlite3@12.10.0": true
+  },
   "type": "module",
   "scripts": {
     "start": "node --no-deprecation server.js",
