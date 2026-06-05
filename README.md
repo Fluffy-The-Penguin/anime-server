@@ -1,6 +1,6 @@
-# AniTrack Sync Backend
+# watchAny Sync Backend
 
-Small Express API used only for AniTrack account login and cloud sync. It stores one opaque JSON sync document per user in SQLite, so the app can sync libraries, settings, extension setup, and backup state without this server knowing the app schema.
+Small Express API used only for watchAny account login and cloud sync. It stores one opaque JSON sync document per user in SQLite, so the app can sync libraries, settings, extension setup, and backup state without this server knowing the app schema.
 
 ## Local Run
 
@@ -8,6 +8,8 @@ Small Express API used only for AniTrack account login and cloud sync. It stores
 npm install
 npm start
 ```
+
+The server reads `.env` from the working directory before startup.
 
 Health check:
 
@@ -19,7 +21,7 @@ curl http://localhost:3000/health
 
 - `PORT`: HTTP port. The server also reads `SERVER_PORT`, `P_SERVER_PORT`, and `APP_PORT`.
 - `CORS_ORIGIN`: Comma-separated allowed origins, or `*`.
-- `ACCOUNT_SECRET`: Secret used to sign account tokens. Set this in production.
+- `ACCOUNT_SECRET`: Secret used to sign account tokens. Set this in production. If missing, the server generates a temporary secret and all login tokens expire on restart.
 - `ACCOUNT_DATABASE_FILE`: SQLite database path. Defaults to `data/sync.sqlite`.
 - `ACCOUNT_JSON_LIMIT`: Maximum request body size. Defaults to `50mb`.
 - `ACCOUNT_TOKEN_TTL_MS`: Token lifetime. Defaults to 90 days.

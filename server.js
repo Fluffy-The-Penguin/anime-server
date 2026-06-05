@@ -5,11 +5,13 @@ import { createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypt
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+loadEnvFile();
+
 const PORT = Number(process.env.PORT || process.env.SERVER_PORT || process.env.P_SERVER_PORT || process.env.APP_PORT || 3000);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 const ACCOUNT_DATABASE_FILE = process.env.ACCOUNT_DATABASE_FILE || process.env.SQLITE_FILE || join(process.cwd(), "data", "sync.sqlite");
 const LEGACY_ACCOUNT_DATA_FILE = process.env.ACCOUNT_DATA_FILE || join(process.cwd(), "data", "users.json");
-const ACCOUNT_SECRET = process.env.ACCOUNT_SECRET || "anitrack-account-secret";
+const ACCOUNT_SECRET = accountSecret();
 const ACCOUNT_JSON_LIMIT = process.env.ACCOUNT_JSON_LIMIT || process.env.JSON_LIMIT || "50mb";
 const ACCOUNT_TOKEN_TTL_MS = Number(process.env.ACCOUNT_TOKEN_TTL_MS || 1000 * 60 * 60 * 24 * 90);
 
@@ -29,7 +31,7 @@ app.use(cors({
 app.use(express.json({ limit: ACCOUNT_JSON_LIMIT }));
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, service: "anitrack-sync", storage: "sqlite" });
+  res.json({ ok: true, service: "watchany-sync", storage: "sqlite" });
 });
 
 app.post("/api/account/register", (req, res, next) => {
@@ -114,11 +116,37 @@ app.use((error, req, res, next) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`AniTrack sync server running on port ${PORT}`);
+  console.log(`watchAny sync server running on port ${PORT}`);
 });
 
 function normalizeUsername(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+}
+
+function loadEnvFile() {
+  const envFile = join(process.cwd(), ".env");
+  if (!existsSync(envFile)) return;
+  try {
+    readFileSync(envFile, "utf8").split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return;
+      const separator = trimmed.indexOf("=");
+      if (separator <= 0) return;
+      const key = trimmed.slice(0, separator).trim();
+      let value = trimmed.slice(separator + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+      if (key && process.env[key] === undefined) process.env[key] = value;
+    });
+  } catch (error) {
+    console.warn("Could not load .env file", error);
+  }
+}
+
+function accountSecret() {
+  const secret = String(process.env.ACCOUNT_SECRET || "").trim();
+  if (secret) return secret;
+  console.warn("ACCOUNT_SECRET is not set. Generated a temporary token secret; existing login tokens will expire when the server restarts.");
+  return randomBytes(32).toString("base64url");
 }
 
 function openDatabase() {
